@@ -1104,7 +1104,7 @@
         // If Windy starts it independently, stop it before selecting a frame.
         try{if(store.get('animation')===true)wmStopOriginalAnimation(store);}catch(_){}
 
-        const frame=plan.find(v=>v.time>now+30000)??plan[0];
+        let frame=plan.find(v=>v.time>now+30000)??plan[0];
         let ok=false;
         try{ok=wmSetFrame(store,frame);}catch(_){}
         if(!ok){
@@ -1115,7 +1115,10 @@
             }
             // Skip a rejected timestamp once; do not hand control to native Play.
             const following=plan.find(v=>v.time>frame.time);
-            if(following)try{ok=wmSetFrame(store,following);}catch(_){}
+            if(following)try{
+                ok=wmSetFrame(store,following);
+                if(ok)frame=following;
+            }catch(_){}
             if(!ok){
                 wmStop('O Windy não aceitou o próximo horário da timeline.');
                 return;
@@ -1173,7 +1176,15 @@
             setStatus('Posicione a timeline no início e no fim usando as setas, para registrar o intervalo.');
             return true;
         }
+        // Some Windy builds reset the timestamp when animation is stopped.
+        // Restore the timestamp chosen by the user before beginning playback.
+        const chosenTime=now;
         wmStopOriginalAnimation(store);
+        try{
+            const afterStop=wmTime(store.get(key));
+            if(afterStop!==null && Math.abs(afterStop-chosenTime)>30000)
+                store.set(key,chosenTime);
+        }catch(_){}
         wm.plan=plan;wm.planKey=key;wm.activeKey=key;
         wm.playing=true;wm.product=product;wm.play=button;
         wm.failures=0;wm.playEvents++;
