@@ -29,6 +29,8 @@
 | --- | --- |
 | 🎨 **Cores do mapa** | Remove filtros visuais locais de tons de cinza quando presentes. |
 | 🧹 **Modo limpo instantâneo** | O botão de vassoura oculta logotipo, barras, laterais e timeline para deixar somente o mapa. |
+| 🪟 **Logotipo superior** | Pode ocultar somente a marca Windy.com, independentemente do modo limpo. |
+| 🌘 **Sombras** | Aplica contraste gradual ao redor da busca, menus laterais e controles inferiores. |
 | 👑 **Indicadores Premium** | Remove globalmente as coroas sem apagar o texto ou o controle associado. |
 | ⚙️ **Painel configurável** | Fica no canto inferior esquerdo e pode ser arrastado pelo cabeçalho. |
 | ⭐ **Vista salva** | Guarda a URL atual do Windy e permite reabri-la depois. |

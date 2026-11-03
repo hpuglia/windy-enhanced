@@ -29,4 +29,6 @@ for (const field of ['homepageURL', 'supportURL', 'downloadURL', 'updateURL']) {
 assert.ok(!script.includes('\uFFFD'), 'O userscript contém caracteres de substituição Unicode.');
 assert.ok(script.includes('html.we-hide-promos .premium-flag'), 'Seletor global das coroas Premium ausente.');
 assert.ok(!script.includes(':has(.premium-flag)'), 'Não oculte controles inteiros para remover a coroa Premium.');
+assert.match(script, /hideLogo:\s*true/, 'A ocultação padrão do logotipo deve permanecer ativa.');
+assert.match(script, /shadows:\s*true/, 'As sombras devem permanecer ativas por padrão.');
 console.log(`Windy Enhanced v${version}: metadados e documentação validados.`);

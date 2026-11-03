@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Windy Enhanced - Cores, Interface e Controles
 // @namespace    https://www.windy.com/
-// @version      6.2.0
+// @version      6.3.0
 // @description  Melhora a interface do Windy com opções visuais, visualização limpa, favoritos de visualização e controles opcionais da linha do tempo.
 // @author       Henrique / Puglia Apps
 // @match        https://www.windy.com/*
@@ -20,14 +20,16 @@
 (function () {
     'use strict';
 
-    // Windy Enhanced 6.2 - interface local. Nenhuma requisição externa,
+    // Windy Enhanced 6.3 - interface local. Nenhuma requisição externa,
     // alteração de credenciais ou simulação de assinatura.
-    const VERSION = '6.2.0';
+    const VERSION = '6.3.0';
     const STORAGE_KEY = 'windy-enhanced:v6:settings';
     const ALLOWED_VIEW_ORIGINS = new Set(['https://windy.com', 'https://www.windy.com']);
     const DEFAULTS = Object.freeze({
         restoreColors: true,
+        hideLogo: true,
         hidePromos: true,
+        shadows: true,
         focusMode: false,
         savedView: null
     });
@@ -57,7 +59,9 @@
         const obj = input && typeof input === 'object' ? input : {};
         return {
             restoreColors: typeof obj.restoreColors === 'boolean' ? obj.restoreColors : DEFAULTS.restoreColors,
+            hideLogo: typeof obj.hideLogo === 'boolean' ? obj.hideLogo : DEFAULTS.hideLogo,
             hidePromos: typeof obj.hidePromos === 'boolean' ? obj.hidePromos : DEFAULTS.hidePromos,
+            shadows: typeof obj.shadows === 'boolean' ? obj.shadows : DEFAULTS.shadows,
             focusMode: typeof obj.focusMode === 'boolean' ? obj.focusMode : DEFAULTS.focusMode,
             savedView: safeView(obj.savedView)
         };
@@ -156,6 +160,36 @@
             display: none !important;
         }
 
+        /* A ocultação do logotipo é independente do modo limpo. */
+        html.we-hide-logo #logo-wrapper {
+            display: none !important;
+        }
+
+        /* Sombras graduais preservam o mapa e aumentam o contraste somente
+           ao redor dos grupos de interface. */
+        html.we-shadows #search {
+            filter: drop-shadow(14px 18px 22px rgba(0,0,0,.42));
+        }
+        html.we-shadows .rhpane,
+        html.we-shadows #desktop-menu,
+        html.we-shadows [data-plugin="mobile-ui"],
+        html.we-shadows #plugin-mobile-ui {
+            filter: drop-shadow(-20px 0 26px rgba(0,0,0,.5));
+        }
+        html.we-shadows #bottom-wrapper,
+        html.we-shadows [data-plugin="bottom-controls-desktop"],
+        html.we-shadows [data-plugin="bottom-controls-mobile"],
+        html.we-shadows .metric-legend {
+            filter: drop-shadow(0 -18px 25px rgba(0,0,0,.46));
+        }
+        html.we-shadows .leaflet-control-container,
+        html.we-shadows .maplibregl-control-container {
+            filter: drop-shadow(0 8px 18px rgba(0,0,0,.48));
+        }
+        html.we-shadows #we-quick-controls {
+            filter: drop-shadow(0 0 16px rgba(0,0,0,.65));
+        }
+
         #we-root { position: fixed; left: 14px; bottom: 14px; z-index: 2147483645;
             color: #f0f4fb; font: 13px/1.45 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
             direction: ltr; text-align: left; pointer-events: none; }
@@ -219,6 +253,8 @@
         if (html) {
             html.classList.toggle('we-hide-promos', settings.hidePromos);
             html.classList.toggle('we-restore-colors', settings.restoreColors);
+            html.classList.toggle('we-hide-logo', settings.hideLogo);
+            html.classList.toggle('we-shadows', settings.shadows);
             html.classList.toggle('we-focus', settings.focusMode);
         }
         for (const [name, input] of toggles) input.checked = settings[name];
@@ -520,7 +556,9 @@
         panel.appendChild(header);
         section(panel, 'Visual');
         addSetting(panel, 'restoreColors', 'Cores do mapa', 'Remove filtros visuais locais quando presentes.');
+        addSetting(panel, 'hideLogo', 'Ocultar logotipo superior', 'Remove apenas a marca Windy.com do topo da tela.');
         addSetting(panel, 'hidePromos', 'Ocultar chamadas Premium', 'Esconde banners e botões promocionais reconhecidos.');
+        addSetting(panel, 'shadows', 'Sombras', 'Cria contraste suave entre o mapa e os grupos de controles.');
 
         section(panel, 'Linha do tempo');
         const timeButtons = document.createElement('div');

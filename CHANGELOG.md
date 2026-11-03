@@ -1,5 +1,11 @@
 # Changelog
 
+## [6.3.0] - 2026-11-03
+
+- Adicionada opção independente para ocultar o logotipo superior do Windy, ativada por padrão.
+- Adicionada opção `Sombras`, ativada por padrão, para melhorar o contraste entre o mapa e os controles.
+- Aplicadas sombras graduais e direcionais à busca, menus laterais, controles inferiores e atalhos do Enhanced.
+
 ## [6.2.0] - 2026-11-03
 
 - Movidos os atalhos do Windy Enhanced para o canto inferior esquerdo.
