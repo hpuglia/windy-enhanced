@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Windy Enhanced - Cores, Interface e Controles
 // @namespace    https://www.windy.com/
-// @version      6.6.1
+// @version      6.6.2
 // @description  Melhora a interface do Windy com opções visuais, visualização limpa, favoritos de visualização e controles opcionais da linha do tempo.
 // @author       Henrique / Puglia Apps
 // @match        https://www.windy.com/*
@@ -23,7 +23,7 @@
 
     // Windy Enhanced 6.4 - interface local. Nenhuma requisição externa,
     // alteração de credenciais ou simulação de assinatura.
-    const VERSION = '6.6.1';
+    const VERSION = '6.6.2';
     const STORAGE_KEY = 'windy-enhanced:v6:settings';
     const ALLOWED_VIEW_ORIGINS = new Set(['https://windy.com', 'https://www.windy.com']);
     const DEFAULTS = Object.freeze({
@@ -898,7 +898,8 @@
         ignoreClickUntil:0,reason:'',scanTimer:null,scanPending:new Set(),
         plan:[],planKey:null,lastTarget:null,failures:0,recordedMax:null,
         playEvents:0,segmentFailures:0,eventsStore:null,
-        arrowUntil:0,arrowKey:null,subscribedKeys:[]};
+        arrowUntil:0,arrowKey:null,subscribedKeys:[],
+        eventTrace:[],playAttempts:0};
     const WM_KEYS=['radarTimestamp','satelliteTimestamp','radsatTimestamp'];
     const WM_HOUR=/^(?:(?:há|ago)\s*)?(24|6|1)\s*h$/i;
     const WM_AERIAL=/^(?:aerial|aéreo|aérea)$/i;
@@ -1069,6 +1070,30 @@
         speed=String(speed||'normal').toLowerCase();
         return /slow|turtle|lento/.test(speed)?750:/fast|goat|rápid|2x|4x/.test(speed)?150:350;
     }
+    // Somente diagnóstico local: não instala barra nem altera o play.
+    function wmTrace(type,details={}){
+        const record={at:new Date().toISOString(),type,...details};
+        wm.eventTrace.push(record);
+        if(wm.eventTrace.length>65)wm.eventTrace.shift();
+    }
+    function wmStoreTrace(){
+        const store=wmStore(),keys=[
+            'product','overlay','radarTimestamp','satelliteTimestamp',
+            'radsatTimestamp','lastRenderedTimestamp','animation','animationSpeed',
+            'radarPlusSegmentRange','radarPlusAnimationRange'
+        ];
+        const out={};
+        for(const key of keys){
+            try{
+                const v=store?.get(key);
+                if(v===null||['string','number','boolean'].includes(typeof v))out[key]=v;
+                else if(Array.isArray(v)&&v.length<=6)out[key]=v;
+                else if(v&&typeof v==='object'&&Object.keys(v).length<=6)out[key]=v;
+            }catch(_){}
+        }
+        return out;
+    }
+
     function wmStop(message){
         wm.playing=false;
         if(wm.timer!==null)clearTimeout(wm.timer);
@@ -1076,7 +1101,7 @@
         wm.play?.classList.remove('we-running');
         wm.activeKey=null;
         wm.planKey=null;wm.plan=[];wm.lastTarget=null;wm.failures=0;
-        if(message){wm.reason=message;setStatus(message);}
+        if(message){wm.reason=message;setStatus(message);wmTrace('replay-stopped',{reason:message});}
     }
     function wmStepSynthetic(){
         const init={key:'ArrowRight',code:'ArrowRight',bubbles:true,cancelable:true};
@@ -1164,7 +1189,9 @@
         wm.timer=setTimeout(render,100);
     }
     function wmPlayStart(event,button){
+        wm.playAttempts++;
         const store=wmStore(),product=wmProduct(store);
+        wmTrace('play-attempt',{product,playing:wm.playing,clock:wm.arrowKey});
         if(!product)return false;
         // Always consume the original Play in Radar/Satellite. Previously a
         // lack of sampled frames passed it to Windy, which snapped to last 1h.
@@ -1181,6 +1208,7 @@
         }
         const plan=wmBuildPlan(store,product,key);
         if(plan.length<2){
+            wmTrace('play-no-frames',{key,count:plan.length});
             setStatus('Posicione a timeline no início e no fim usando as setas, para registrar o intervalo.');
             return true;
         }
@@ -1200,6 +1228,7 @@
         wm.failures=0;wm.playEvents++;
         button.classList.add('we-running');
         wm.timer=setTimeout(wmTick,70);
+        wmTrace('play-started',{key,frames:plan.length,first:plan[0].time,last:plan[plan.length-1].time});
         setStatus('Replay contínuo iniciado: '+plan.length+' quadros no mesmo relógio.');
         return true;
     }
@@ -1311,6 +1340,19 @@
             event.type==='pointerdown'&&event.button!==0)return;
         const path=typeof event.composedPath==='function'?event.composedPath():[event.target];
         let action=wmAction(event);
+        if((event.type==='pointerdown'||event.type==='click')&&
+            wm.play?.isConnected && (
+            wmAt(event,wm.play) || event.target?.closest?.('[data-we-native-play]'))){
+            const el=event.target;
+            const hit=document.elementFromPoint?.(event.clientX,event.clientY);
+            wmTrace('play-pointer',{
+                event:event.type,matched:action?.kind||null,
+                target:el?.tagName||null,targetDisabled:!!el?.disabled,
+                hit:hit?.tagName||null,hitClass:String(hit?.className||'').slice(0,90),
+                originalDisabled:!!wm.play.disabled,
+                nativeAnimation:wmStoreTrace().animation
+            });
+        }
         const aerial=path.some(wmIsAerial);
         if(!action&&aerial)action={kind:'aerial'};
         if(!action&&path.some(wmPurchase))action={kind:'purchase'};
@@ -1437,11 +1479,16 @@
         wmControls();wmObserve();wmQueueScan(document.body);
         try{
             const p=typeof unsafeWindow!=='undefined'?unsafeWindow:window;
+            Object.defineProperty(p,'WindyEnhancedTrace',{configurable:true,value:()=>({
+                version:VERSION,playAttempts:wm.playAttempts,events:[...wm.eventTrace],
+                store:wmStoreTrace(),buttonFound:Boolean(wm.play?.isConnected)
+            })});
             Object.defineProperty(p,'WindyEnhancedStatus',{configurable:true,value:()=>({
                 version:VERSION,store:!!wmStore(),product:wmProduct(wmStore()),
                 hours:wm.hours,playing:wm.playing,activeKey:wm.activeKey,
                 effectiveTimeline:wm.hours===1?'todos os quadros observados':wm.hours+'h',
                 playbackFrames:wm.plan.length,playEvents:wm.playEvents,
+                playAttempts:wm.playAttempts,traceEvents:wm.eventTrace.length,
                 arrowClock:wm.arrowKey,subscribedKeys:[...wm.subscribedKeys],
                 playFound:Boolean(wm.play?.isConnected),
                 playRect:wm.play?.isConnected ? (()=>{
