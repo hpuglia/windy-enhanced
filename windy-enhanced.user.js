@@ -1135,8 +1135,15 @@
             frames.push(...available,latest);
         }
         const snapshots=wm.segments[product].get(key);
-        return [...new Set(frames.filter(t=>t>=earliest&&t<=latest))].sort((a,b)=>a-b)
-            .slice(0,maxFrames).map(time=>({key,time,segment:snapshots?.get(time)}));
+        const chronological=[...new Set(frames.filter(t=>t>=earliest&&t<=latest))]
+            .sort((a,b)=>a-b);
+        // A dense calendar may list hundreds of frames. Sample uniformly,
+        // including BOTH endpoints, instead of truncating and losing red frames.
+        const selected=chronological.length>maxFrames
+            ? Array.from({length:maxFrames},(_,i)=>chronological[
+                Math.round(i*(chronological.length-1)/(maxFrames-1))])
+            : chronological;
+        return selected.map(time=>({key,time,segment:snapshots?.get(time)}));
     }
     function wmWarmNext(){
         if(!wm.playing||wm.phase!=='preloading')return;
