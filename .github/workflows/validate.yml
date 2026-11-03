@@ -3,6 +3,10 @@ on:
   push:
     paths:
       - 'windy-enhanced.user.js'
+      - 'package.json'
+      - 'CHANGELOG.md'
+      - 'README.md'
+      - 'scripts/validate-userscript.mjs'
       - '.github/workflows/validate.yml'
   pull_request:
     paths:
