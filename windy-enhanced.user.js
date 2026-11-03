@@ -1017,7 +1017,12 @@
             wmStop('Reprodução pausada.');return true;
         }
         const store=wmStore(),product=wmProduct(store);
-        if(!product)return false;
+        if(!product){
+            if(wm.hours>1){event.preventDefault();event.stopImmediatePropagation();
+                setStatus('O Windy não expõe a API de radar nesta sessão; não é possível iniciar o replay.');
+                return true;}
+            return false;
+        }
         wmObserve();
         const key=wmKey(store,product);
         if(!key)return false;
@@ -1072,7 +1077,6 @@
         }
     }
     function wmControls(){
-        if(!wmProduct(wmStore()))return;
         const h=wmHoursScan();
         if(h.size!==3)return;
         for(const [hours,el]of h){
@@ -1127,7 +1131,7 @@
     }
     function wmInteraction(event){
         if(!event.isTrusted || event.type==='keydown'&&!['Enter',' '].includes(event.key) ||
-            event.type==='pointerdown'&&event.button!==0)return;
+            (event.type==='pointerdown'||event.type==='pointerup')&&event.button!==0)return;
         const path=typeof event.composedPath==='function'?event.composedPath():[event.target];
         let action=wmAction(event);
         const aerial=path.some(wmIsAerial);
@@ -1148,7 +1152,7 @@
             if(action.kind==='aerial')wmAerial();
             else setStatus('Oferta Premium bloqueada.');
         }
-        if(event.type==='pointerdown')wm.ignoreClickUntil=Date.now()+550;
+        if(event.type==='pointerdown'||event.type==='pointerup')wm.ignoreClickUntil=Date.now()+550;
     }
     function wmScanAerialAndHeading(root){
         if(!root?.querySelectorAll)return;
@@ -1156,7 +1160,14 @@
             ...root.querySelectorAll('div,span,button,a,label,li')];
         for(const el of els){
             if(wmIsAerial(el)){
-                const parent=el.closest('button,a,[role="button"],li,.clickable')||el.parentElement||el;
+                let parent=el.closest('button,a,[role="button"],li,.clickable')||el.parentElement||el;
+                for(let current=el.parentElement,depth=0;current&&depth<4;current=current.parentElement,depth++){
+                    const r=current.getBoundingClientRect();
+                    if(r.width>35&&r.width<195&&r.height>40&&r.height<185&&
+                       current.querySelector('img,svg')&&/aerial/i.test(wmText(current))){
+                        parent=current;break;
+                    }
+                }
                 if(wmText(parent).length>100)continue;
                 wm.aerial=parent;parent.setAttribute('data-we-aerial','1');
                 parent.removeAttribute('disabled');parent.setAttribute('aria-disabled','false');
@@ -1192,13 +1203,13 @@
     }
     function wmScanBrand(root){
         if(!settings.hideBranding||!root?.querySelectorAll)return;
-        const els=[...(root.matches?.('img,svg,a,[title],[aria-label],[class*="logo"],span')?[root]:[]),
-            ...root.querySelectorAll('img,svg,a,[title],[aria-label],[class*="logo"],span')];
+        const sels='img,svg,a,span,div[style],[title],[aria-label],[class*="logo"],[class*="branding"]';
+        const els=[...(root.matches?.(sels)?[root]:[]),...root.querySelectorAll(sels)];
         for(const el of els){
             if(el.closest('#we-root'))continue;
             const meta=[el.getAttribute('alt'),el.getAttribute('src'),
                 el.getAttribute('title'),el.getAttribute('aria-label'),
-                el.getAttribute('href'),typeof el.className==='string'?el.className:'',
+                el.getAttribute('href'),el.getAttribute('style'),typeof el.className==='string'?el.className:'',
                 el.matches('span,a')?wmText(el).slice(0,80):''].filter(Boolean).join(' ');
             if(!/nowcast|noaa|cemaden/i.test(meta))continue;
             const r=el.getBoundingClientRect();
@@ -1221,8 +1232,6 @@
         },150);
     }
     function initWindyNative() {
-        for(const type of ['pointerdown','click','keydown'])
-            window.addEventListener(type,wmInteraction,true);
         window.addEventListener('keydown',ev=>{
             if(!ev.isTrusted||!['ArrowLeft','ArrowRight'].includes(ev.key))return;
             if(wm.playing)wmStop();
@@ -1243,6 +1252,10 @@
             })});
         }catch(_){}
     }
+
+    // Registra antes dos handlers do Windy (o script executa no document-start).
+    for(const type of ['pointerdown','pointerup','click','keydown'])
+        window.addEventListener(type,wmInteraction,true);
 
     function start() {
         applySettings();
