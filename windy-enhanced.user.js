@@ -13,6 +13,7 @@
 // @updateURL    https://raw.githubusercontent.com/hpuglia/windy-enhanced/main/windy-enhanced.user.js
 // @grant        GM_addStyle
 // @grant        GM_registerMenuCommand
+// @grant        unsafeWindow
 // @run-at       document-start
 // @license      MIT
 // ==/UserScript==
