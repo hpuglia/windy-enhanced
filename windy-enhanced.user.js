@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Windy Enhanced - Cores, Interface e Controles
 // @namespace    https://www.windy.com/
-// @version      6.5.1
+// @version      6.5.2
 // @description  Melhora a interface do Windy com opções visuais, visualização limpa, favoritos de visualização e controles opcionais da linha do tempo.
 // @author       Henrique / Puglia Apps
 // @match        https://www.windy.com/*
@@ -23,7 +23,7 @@
 
     // Windy Enhanced 6.4 - interface local. Nenhuma requisição externa,
     // alteração de credenciais ou simulação de assinatura.
-    const VERSION = '6.5.1';
+    const VERSION = '6.5.2';
     const STORAGE_KEY = 'windy-enhanced:v6:settings';
     const ALLOWED_VIEW_ORIGINS = new Set(['https://windy.com', 'https://www.windy.com']);
     const DEFAULTS = Object.freeze({
@@ -1034,7 +1034,12 @@
         try{now=wmTime(store.get(key));}catch(_){now=null;}
         if(now===null){wmStop('Horário atual não disponível.');return;}
 
-        const cutoff=Date.now()-wm.hours*3600000-20*60000;
+        // 1h é a preferência do Play nativo, não a duração real da timeline.
+        // Quando o Enhanced assume o replay, percorre TODOS os quadros já
+        // observados. 6h e 24h continuam delimitando o intervalo escolhido.
+        const cutoff=wm.hours>1
+            ? Date.now()-wm.hours*3600000-20*60000
+            : -Infinity;
         const known=wmSequence(product,cutoff);
         // The white radar and red extrapolated forecast are separate native
         // loops. Crossing works when the corresponding red-segment state has
@@ -1100,7 +1105,13 @@
         if(!key)return false;
         const now=wmTime(store.get(key));
         if(now===null)return false;
-        if(wm.hours===1&&Date.now()-now<65*60000)return false;
+        // Se foram observados quadros além de 1h, assumir o Play original
+        // mesmo que a aba visual ainda mostre "1h". Caso contrário, manter
+        // o player nativo para não interferir no comportamento normal.
+        const observed=wmSequence(product,-Infinity);
+        const extended=observed.length>=2 &&
+            observed[observed.length-1].time-observed[0].time>65*60000;
+        if(wm.hours===1&&!extended&&Date.now()-now<65*60000)return false;
         event.preventDefault();event.stopImmediatePropagation();
         wm.playing=true;wm.product=product;wm.activeKey=key;wm.play=button;
         button.classList.add('we-running');
@@ -1123,6 +1134,9 @@
         return wm.hourEls;
     }
     function wmFindPlay(){
+        // Uma varredura de interface não pode trocar a referência do botão
+        // durante a reprodução: isso causava pausas inesperadas.
+        if(wm.playing && wm.play?.isConnected)return;
         const first=wm.hourEls.get(24)?.getBoundingClientRect();
         if(!first)return;
         let best=null,dist=Infinity;
@@ -1202,8 +1216,11 @@
             el.matches('a[href*="/premium"],a[href*="/subscription"]'));
     }
     function wmInteraction(event){
+        // pointerup pertence ao mesmo clique de pointerdown. Processar os dois
+        // fazia um Play iniciar e pausar imediatamente.
+        if(event.type==='pointerup')return;
         if(!event.isTrusted || event.type==='keydown'&&!['Enter',' '].includes(event.key) ||
-            (event.type==='pointerdown'||event.type==='pointerup')&&event.button!==0)return;
+            event.type==='pointerdown'&&event.button!==0)return;
         const path=typeof event.composedPath==='function'?event.composedPath():[event.target];
         let action=wmAction(event);
         const aerial=path.some(wmIsAerial);
@@ -1224,7 +1241,7 @@
             if(action.kind==='aerial')wmAerial();
             else setStatus('Oferta Premium bloqueada.');
         }
-        if(event.type==='pointerdown'||event.type==='pointerup')wm.ignoreClickUntil=Date.now()+550;
+        if(event.type==='pointerdown')wm.ignoreClickUntil=Date.now()+550;
     }
     function wmScanAerialAndHeading(root){
         if(!root?.querySelectorAll)return;
@@ -1319,6 +1336,7 @@
             Object.defineProperty(p,'WindyEnhancedStatus',{configurable:true,value:()=>({
                 version:VERSION,store:!!wmStore(),product:wmProduct(wmStore()),
                 hours:wm.hours,playing:wm.playing,activeKey:wm.activeKey,
+                effectiveTimeline:wm.hours===1?'todos os quadros observados':wm.hours+'h',
                 lastChanged:wm.lastChanged,
                 sampled:Object.fromEntries([...wm.sampled[wm.product||'radar']].map(([k,v])=>[k,v.size])),
                 reason:wm.reason
