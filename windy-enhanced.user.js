@@ -1105,6 +1105,45 @@
             }
             element.toggleAttribute('data-we-radsat-selected', nativeReplay.selectedHours === hours);
             element.toggleAttribute('data-we-radsat-deselected', hours === 1 && nativeReplay.selectedHours !== 1);
+            const parent = element.closest('button, [role="button"], .clickable');
+            if (parent && parent !== element && parent.getBoundingClientRect().width <= 120) {
+                parent.setAttribute('data-we-radsat-hours', String(hours));
+                if (hours !== 1) {
+                    parent.removeAttribute('disabled');
+                    parent.setAttribute('aria-disabled', 'false');
+                }
+            }
+        }
+
+        // O Play desabilitado pode estar fora do mesmo container de 1h/6h/24h.
+        // Reabilita APENAS o botão circular da timeline se há quadros conhecidos
+        // para replay. Não toca nos botões de outros painéis ou assinaturas.
+        const choice = nativeReplayChoice(nativeReplayProduct(store));
+        const current = nativeReplayTime(store.get('radsatTimestamp')) ??
+            nativeReplayTime(store.get(nativeReplayProduct(store) === 'radar'
+                ? 'radarTimestamp' : 'satelliteTimestamp'));
+        const oldTime = current !== null && Date.now() - current > 65 * 60000;
+        if (!choice || (nativeReplay.selectedHours === 1 && !oldTime)) return;
+
+        const firstTab = found.get(24).getBoundingClientRect();
+        const playCandidates = document.querySelectorAll(
+            'button, [role="button"], .clickable, [data-ref], [class*="play-button"]'
+        );
+        for (const node of playCandidates) {
+            if (node.closest('#we-root')) continue;
+            const rect = node.getBoundingClientRect();
+            if (!rect.width || !rect.height || rect.width > 85 || rect.height > 85 ||
+                rect.width < 24 || rect.height < 24 || rect.bottom < innerHeight - 265 ||
+                rect.right > firstTab.left + 30 || Math.abs(rect.top - firstTab.top) > 55) continue;
+            const label = [
+                node.id, typeof node.className === 'string' ? node.className : '',
+                node.getAttribute('aria-label'), node.getAttribute('data-ref'), node.getAttribute('title')
+            ].filter(Boolean).join(' ');
+            if (!/(play|pause|reproduzir|pausar|animat)/i.test(label)) continue;
+            node.setAttribute('data-we-radsat-play', '1');
+            node.removeAttribute('disabled');
+            node.setAttribute('aria-disabled', 'false');
+            break;
         }
     }
 
@@ -1234,6 +1273,8 @@
             'background: #f7f7f7; color: #d00; pointer-events: none; font: bold 18px system-ui; }'
         );
         addCSS(
+            '[data-we-radsat-play="1"] { opacity:1 !important; filter:none !important; ' +
+            'pointer-events:auto !important; cursor:pointer !important; }' +
             '[data-we-radsat-hours="6"], [data-we-radsat-hours="24"] {' +
             'opacity:1 !important; filter:none !important; pointer-events:auto !important; cursor:pointer !important; }' +
             '[data-we-radsat-selected] { background:#ad6954 !important; color:#fff !important; ' +
