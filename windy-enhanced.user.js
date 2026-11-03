@@ -1251,11 +1251,11 @@
         }, true);
         window.addEventListener('pagehide', nativeReplayStop);
         window.setInterval(() => {
-            if (!document.hidden) {
-                nativeReplayObserve();
-                nativeReplayRefreshOriginalControls();
-            }
+            if (!document.hidden) nativeReplayObserve();
         }, 135);
+        window.setInterval(() => {
+            if (!document.hidden) nativeReplayRefreshOriginalControls();
+        }, 1100);
         nativeReplayObserve();
         nativeReplayRefreshOriginalControls();
     }
