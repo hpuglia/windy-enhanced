@@ -1,5 +1,48 @@
 # Changelog
 
+## [6.7.1] - 2026-11-03
+
+- Mantido o botão Play/Pause original clicável durante o pré-carregamento e a reprodução; clique novamente para interromper.
+- Adicionado `Esc` para cancelar a preparação ou o loop e limpar os temporizadores.
+- Preservado o fluxo de pré-carregamento sequencial introduzido na 6.7.0.
+
+## [6.7.0] - 2026-11-03
+
+- Introduzido pré-carregamento sequencial da timeline de Radar/Satélite, aguardando o carregamento de cada quadro antes da reprodução.
+- Retorno ao primeiro quadro preparado e reprodução contínua em loop no botão original.
+- Adicionados diagnósticos da preparação, progresso e falhas de renderização.
+- Ajustada a distribuição de horários para incluir o início e o final do intervalo preparado.
+- Limitação: depende dos horários disponibilizados pelo Windy e do cache/renderização local.
+
+## [6.6.2] - 2026-11-03
+
+- Adicionado diagnóstico `WindyEnhancedTrace()` para eventos do Play e estados da timeline.
+
+## [6.6.1] - 2026-11-03
+
+- Corrigido horário inicial indefinido e ampliado registro das mudanças de tempo no store.
+- Removida a geração agressiva de horários intermediários.
+
+## [6.5.3] - 2026-11-03
+
+- Isolado um relógio temporal por replay para evitar saltos entre fontes distintas.
+
+## [6.5.2] - 2026-11-03
+
+- Corrigida interceptação duplicada do Play e o filtro indevido de 1h no replay ampliado.
+
+## [6.5.1] - 2026-11-03
+
+- Preservadas as opções de estilos de mapa ao ocultar branding.
+- Removidos os controles experimentais da seção “Linha do tempo” do painel de configurações.
+
+## [6.5.0] - 2026-11-03
+
+- Implementado adaptador para o Play original do Windy com opções locais de Radar/Satélite.
+- Adicionadas tentativas de tratamento de modais Premium e do estilo Aerial.
+- Reforçada a ocultação dos selos institucionais, sem barra extra de replay.
+
+
 ## [6.4.1] - 2026-11-03
 
 - Ocultado por padrão o atalho `Arquivo`, que abre o histórico temporal e não representa o cache.
