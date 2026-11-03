@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Windy Enhanced - Cores, Interface e Controles
 // @namespace    https://www.windy.com/
-// @version      6.1.0
+// @version      6.2.0
 // @description  Melhora a interface do Windy com opções visuais, visualização limpa, favoritos de visualização e controles opcionais da linha do tempo.
 // @author       Henrique / Puglia Apps
 // @match        https://www.windy.com/*
@@ -20,9 +20,9 @@
 (function () {
     'use strict';
 
-    // Windy Enhanced 6.1 - interface local. Nenhuma requisição externa,
+    // Windy Enhanced 6.2 - interface local. Nenhuma requisição externa,
     // alteração de credenciais ou simulação de assinatura.
-    const VERSION = '6.1.0';
+    const VERSION = '6.2.0';
     const STORAGE_KEY = 'windy-enhanced:v6:settings';
     const ALLOWED_VIEW_ORIGINS = new Set(['https://windy.com', 'https://www.windy.com']);
     const DEFAULTS = Object.freeze({
@@ -69,7 +69,8 @@
     }
 
     let settings = load();
-    let panel, launcher, panelClose, uiRoot, statusText, viewText;
+    let panel, launcher, cleanToggle, panelClose, uiRoot, statusText, viewText;
+    let dragState = null;
     const toggles = new Map();
 
     function persist() {
@@ -104,8 +105,14 @@
         html.we-hide-promos a[href*="/premium"],
         html.we-hide-promos a[href*="upgrade"],
         html.we-hide-promos [data-plugin="startup-articles"],
-        html.we-hide-promos .map-selector a.clickable:has(.premium-flag),
-        html.we-hide-promos .map-selector [role="button"]:has(.premium-flag),
+        /* O Windy reutiliza .premium-flag para as coroas de horários, dias e
+           opções Premium. Ocultamos somente o marcador, preservando o texto. */
+        html.we-hide-promos .premium-flag,
+        html.we-hide-promos [class^="premium-flag"],
+        html.we-hide-promos [class*=" premium-flag"],
+        html.we-hide-promos .premium-crown,
+        html.we-hide-promos [data-ref="premium-flag"],
+        html.we-hide-promos [data-ref="premiumFlag"],
         html.we-hide-promos [data-we-promo-hidden="1"] {
             display: none !important;
         }
@@ -124,32 +131,55 @@
             content: none !important;
         }
 
-        /* Modo de visualização limpa: apenas elementos auxiliares conhecidos.
-           O mapa, a legenda e a timeline continuam disponíveis. */
+        /* Modo limpo: mantém o mapa e a atribuição cartográfica, removendo
+           barras, painéis e controles sobrepostos conhecidos do Windy. */
+        html.we-focus #logo-wrapper,
         html.we-focus #search,
         html.we-focus #detail-box-desktop,
         html.we-focus #plugin-detail,
         html.we-focus #desktop-menu,
         html.we-focus #mobile-ovr-select,
-        html.we-focus [data-plugin="startup-articles"] {
+        html.we-focus [data-plugin="startup-articles"],
+        html.we-focus #bottom-wrapper,
+        html.we-focus [data-plugin="bottom-controls-desktop"],
+        html.we-focus [data-plugin="bottom-controls-mobile"],
+        html.we-focus [data-plugin="bottom-below-controls-mobile"],
+        html.we-focus #legend-mobile,
+        html.we-focus .metric-legend,
+        html.we-focus #bottom-credits,
+        html.we-focus .rhpane,
+        html.we-focus [data-plugin="bottom-right"],
+        html.we-focus [data-plugin="mobile-ui"],
+        html.we-focus #plugin-mobile-ui,
+        html.we-focus .leaflet-control-container,
+        html.we-focus .maplibregl-control-container {
             display: none !important;
         }
 
-        #we-root { position: fixed; top: 74px; right: 14px; z-index: 2147483645;
+        #we-root { position: fixed; left: 14px; bottom: 14px; z-index: 2147483645;
             color: #f0f4fb; font: 13px/1.45 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
             direction: ltr; text-align: left; pointer-events: none; }
         #we-root * { box-sizing: border-box; }
-        #we-launcher { pointer-events: auto; display: flex; align-items: center; justify-content: center;
-            margin-left: auto; width: 42px; height: 42px; border-radius: 13px;
+        #we-quick-controls { pointer-events: auto; display: flex; align-items: center; gap: 8px; }
+        #we-launcher, #we-clean-toggle { display: flex; align-items: center; justify-content: center;
+            width: 42px; height: 42px; border-radius: 13px;
             background: #172338; color: #fff; border: 1px solid #465b75;
             box-shadow: 0 5px 18px rgba(0,0,0,.3); font-size: 23px; cursor: pointer; }
-        #we-launcher:hover, #we-launcher:focus-visible { background: #253d5f; }
-        #we-panel { pointer-events: auto; display: none; width: min(355px, calc(100vw - 28px));
-            max-height: min(76vh, 680px); overflow-y: auto; margin-top: 9px;
+        #we-launcher:hover, #we-launcher:focus-visible,
+        #we-clean-toggle:hover, #we-clean-toggle:focus-visible { background: #253d5f; }
+        #we-clean-toggle[aria-pressed="true"] { background: #196b68; border-color: #78e0c8;
+            box-shadow: 0 0 0 2px rgba(120,224,200,.2), 0 5px 18px rgba(0,0,0,.3); }
+        #we-panel { pointer-events: auto; position: fixed; display: none;
+            left: 14px; bottom: 66px; width: min(355px, calc(100vw - 28px));
+            max-height: min(76vh, 680px); overflow-y: auto; margin: 0;
             background: #121d30; color: #edf3fa; border: 1px solid #405270;
             border-radius: 15px; padding: 15px; box-shadow: 0 13px 35px rgba(0,0,0,.44); }
         #we-panel.we-open { display: block; }
-        #we-panel .we-header { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 5px; }
+        #we-panel.we-dragging { user-select: none; box-shadow: 0 18px 44px rgba(0,0,0,.55); }
+        #we-panel .we-header { display: flex; justify-content: space-between; align-items: center;
+            gap: 8px; margin: -5px -5px 5px; padding: 5px; border-radius: 10px;
+            cursor: grab; touch-action: none; }
+        #we-panel.we-dragging .we-header { cursor: grabbing; }
         #we-panel .we-heading { display: flex; align-items: center; gap: 8px; min-width: 0; }
         #we-panel h2 { font: 700 17px/1.3 system-ui,sans-serif; margin: 0; color: #fff; }
         #we-panel h3 { font: 700 12px/1.3 system-ui,sans-serif; text-transform: uppercase;
@@ -178,9 +208,9 @@
         #we-panel kbd { padding: 1px 5px; border: 1px solid #6b7c95; border-radius: 4px; color: #fff; font: inherit; }
         #we-import { display: none !important; }
         @media (max-width: 600px) {
-            #we-root { right: 9px; top: 59px; }
-            #we-launcher { width: 39px; height: 39px; }
-            #we-panel { max-height: 68vh; }
+            #we-root { left: 9px; bottom: 9px; }
+            #we-launcher, #we-clean-toggle { width: 39px; height: 39px; }
+            #we-panel { left: 9px; bottom: 57px; max-height: 72vh; }
         }
     `);
 
@@ -192,10 +222,23 @@
             html.classList.toggle('we-focus', settings.focusMode);
         }
         for (const [name, input] of toggles) input.checked = settings[name];
+        if (cleanToggle) {
+            cleanToggle.setAttribute('aria-pressed', String(settings.focusMode));
+            cleanToggle.title = settings.focusMode ? 'Desativar modo limpo' : 'Ativar modo limpo';
+        }
         if (viewText) {
             viewText.textContent = settings.savedView
                 ? `Vista salva em ${settings.savedView.savedAt || 'data desconhecida'}.`
                 : 'Nenhuma vista salva.';
+        }
+    }
+
+    function setFocusMode(enabled, announce = true) {
+        settings.focusMode = Boolean(enabled);
+        persist();
+        applySettings();
+        if (announce) {
+            setStatus(settings.focusMode ? 'Modo limpo ativado.' : 'Modo limpo desativado.');
         }
     }
 
@@ -353,6 +396,58 @@
         reader.readAsText(file);
     }
 
+    function keepPanelInViewport() {
+        if (!panel || !panel.style.top) return;
+        const rect = panel.getBoundingClientRect();
+        const maxLeft = Math.max(8, window.innerWidth - rect.width - 8);
+        const maxTop = Math.max(8, window.innerHeight - rect.height - 8);
+        panel.style.left = `${Math.min(Math.max(8, rect.left), maxLeft)}px`;
+        panel.style.top = `${Math.min(Math.max(8, rect.top), maxTop)}px`;
+    }
+
+    function resetPanelPosition() {
+        if (!panel) return;
+        for (const property of ['top', 'right', 'bottom', 'left']) panel.style.removeProperty(property);
+        setStatus('Posição do painel restaurada.');
+    }
+
+    function startPanelDrag(ev) {
+        if (!panel || ev.button !== 0 || ev.target.closest('button')) return;
+        const rect = panel.getBoundingClientRect();
+        dragState = {
+            pointerId: ev.pointerId,
+            offsetX: ev.clientX - rect.left,
+            offsetY: ev.clientY - rect.top,
+            handle: ev.currentTarget
+        };
+        panel.style.left = `${rect.left}px`;
+        panel.style.top = `${rect.top}px`;
+        panel.style.right = 'auto';
+        panel.style.bottom = 'auto';
+        panel.classList.add('we-dragging');
+        ev.currentTarget.setPointerCapture(ev.pointerId);
+        ev.preventDefault();
+    }
+
+    function movePanel(ev) {
+        if (!panel || !dragState || dragState.pointerId !== ev.pointerId) return;
+        const maxLeft = Math.max(8, window.innerWidth - panel.offsetWidth - 8);
+        const maxTop = Math.max(8, window.innerHeight - panel.offsetHeight - 8);
+        const left = Math.min(Math.max(8, ev.clientX - dragState.offsetX), maxLeft);
+        const top = Math.min(Math.max(8, ev.clientY - dragState.offsetY), maxTop);
+        panel.style.left = `${left}px`;
+        panel.style.top = `${top}px`;
+    }
+
+    function finishPanelDrag(ev) {
+        if (!panel || !dragState || dragState.pointerId !== ev.pointerId) return;
+        const { handle, pointerId } = dragState;
+        if (handle.hasPointerCapture(pointerId)) handle.releasePointerCapture(pointerId);
+        dragState = null;
+        panel.classList.remove('we-dragging');
+        keepPanelInViewport();
+    }
+
     function togglePanel(force) {
         if (!panel || !launcher) return;
         const willOpen = typeof force === 'boolean' ? force : !panel.classList.contains('we-open');
@@ -360,6 +455,7 @@
         launcher.setAttribute('aria-expanded', String(willOpen));
         if (willOpen) {
             setStatus('Preferências aplicadas localmente.');
+            keepPanelInViewport();
             window.setTimeout(() => panelClose?.focus(), 0);
         } else if (panel.contains(document.activeElement)) {
             launcher.focus();
@@ -370,6 +466,8 @@
         if (!document.body || document.getElementById('we-root')) return;
         uiRoot = document.createElement('div');
         uiRoot.id = 'we-root';
+        const quickControls = document.createElement('div');
+        quickControls.id = 'we-quick-controls';
         launcher = document.createElement('button');
         launcher.id = 'we-launcher';
         launcher.type = 'button';
@@ -379,6 +477,13 @@
         launcher.setAttribute('aria-expanded', 'false');
         launcher.setAttribute('aria-controls', 'we-panel');
         launcher.addEventListener('click', () => togglePanel());
+        cleanToggle = document.createElement('button');
+        cleanToggle.id = 'we-clean-toggle';
+        cleanToggle.type = 'button';
+        cleanToggle.textContent = '🧹';
+        cleanToggle.setAttribute('aria-label', 'Alternar modo limpo');
+        cleanToggle.addEventListener('click', () => setFocusMode(!settings.focusMode));
+        quickControls.append(launcher, cleanToggle);
 
         panel = document.createElement('section');
         panel.id = 'we-panel';
@@ -387,6 +492,14 @@
         panel.setAttribute('aria-labelledby', 'we-title');
         const header = document.createElement('div');
         header.className = 'we-header';
+        header.title = 'Arraste para mover. Clique duas vezes para restaurar a posição.';
+        header.addEventListener('pointerdown', startPanelDrag);
+        header.addEventListener('pointermove', movePanel);
+        header.addEventListener('pointerup', finishPanelDrag);
+        header.addEventListener('pointercancel', finishPanelDrag);
+        header.addEventListener('dblclick', ev => {
+            if (!ev.target.closest('button')) resetPanelPosition();
+        });
         const heading = document.createElement('div');
         heading.className = 'we-heading';
         const title = document.createElement('h2');
@@ -405,13 +518,9 @@
         panelClose.addEventListener('click', () => togglePanel(false));
         header.append(heading, panelClose);
         panel.appendChild(header);
-        const intro = document.createElement('p');
-        intro.textContent = 'Personalize o mapa sem alterar sua conta ou os dados meteorológicos.';
-        panel.appendChild(intro);
         section(panel, 'Visual');
         addSetting(panel, 'restoreColors', 'Cores do mapa', 'Remove filtros visuais locais quando presentes.');
         addSetting(panel, 'hidePromos', 'Ocultar chamadas Premium', 'Esconde banners e botões promocionais reconhecidos.');
-        addSetting(panel, 'focusMode', 'Modo visualização limpa', 'Oculta elementos auxiliares sem esconder o mapa ou a linha do tempo.');
 
         section(panel, 'Linha do tempo');
         const timeButtons = document.createElement('div');
@@ -464,7 +573,7 @@
         statusText.setAttribute('role', 'status');
         statusText.setAttribute('aria-live', 'polite');
         panel.appendChild(statusText);
-        uiRoot.append(launcher, panel);
+        uiRoot.append(panel, quickControls);
         document.body.appendChild(uiRoot);
         applySettings();
         setStatus('Pronto para uso.');
@@ -484,12 +593,11 @@
             togglePanel();
         } else if (key === 'l') {
             ev.preventDefault();
-            settings.focusMode = !settings.focusMode;
-            persist();
-            applySettings();
-            setStatus(settings.focusMode ? 'Visualização limpa ativada.' : 'Visualização limpa desativada.');
+            setFocusMode(!settings.focusMode);
         }
     }, true);
+
+    window.addEventListener('resize', () => window.requestAnimationFrame(keepPanelInViewport));
 
     if (typeof GM_registerMenuCommand === 'function') {
         GM_registerMenuCommand('Windy Enhanced — configurações', () => togglePanel(true));

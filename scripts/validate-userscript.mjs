@@ -27,4 +27,6 @@ for (const field of ['homepageURL', 'supportURL', 'downloadURL', 'updateURL']) {
 }
 
 assert.ok(!script.includes('\uFFFD'), 'O userscript contém caracteres de substituição Unicode.');
+assert.ok(script.includes('html.we-hide-promos .premium-flag'), 'Seletor global das coroas Premium ausente.');
+assert.ok(!script.includes(':has(.premium-flag)'), 'Não oculte controles inteiros para remover a coroa Premium.');
 console.log(`Windy Enhanced v${version}: metadados e documentação validados.`);

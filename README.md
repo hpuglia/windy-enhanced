@@ -28,8 +28,9 @@
 | Recurso | Como ajuda |
 | --- | --- |
 | 🎨 **Cores do mapa** | Remove filtros visuais locais de tons de cinza quando presentes. |
-| 🧹 **Interface mais limpa** | Oculta chamadas promocionais reconhecidas e painéis auxiliares opcionais. |
-| ⚙️ **Painel configurável** | Ativa ou desativa cada recurso sem precisar editar o código. |
+| 🧹 **Modo limpo instantâneo** | O botão de vassoura oculta logotipo, barras, laterais e timeline para deixar somente o mapa. |
+| 👑 **Indicadores Premium** | Remove globalmente as coroas sem apagar o texto ou o controle associado. |
+| ⚙️ **Painel configurável** | Fica no canto inferior esquerdo e pode ser arrastado pelo cabeçalho. |
 | ⭐ **Vista salva** | Guarda a URL atual do Windy e permite reabri-la depois. |
 | ↔️ **Linha do tempo** | Oferece botões de horário quando o site expõe uma interface compatível. |
 | 💾 **Backup em JSON** | Exporta, importa ou restaura suas preferências localmente. |
@@ -43,7 +44,9 @@ Tudo funciona localmente no navegador, sem bibliotecas externas e sem envio de d
 1. Instale o [Tampermonkey](https://www.tampermonkey.net/) ou outro gerenciador de userscripts compatível.
 2. Clique em **[Instalar Windy Enhanced](https://raw.githubusercontent.com/hpuglia/windy-enhanced/main/windy-enhanced.user.js)**.
 3. Confirme a instalação no gerenciador.
-4. Acesse [Windy.com](https://www.windy.com/) e abra o painel pelo botão **⚙**.
+4. Acesse [Windy.com](https://www.windy.com/). Use **⚙** para abrir o painel e **🧹** para alternar o modo limpo.
+
+Os dois atalhos visuais ficam no canto inferior esquerdo. Arraste o painel pelo cabeçalho para reposicioná-lo; um clique duplo no cabeçalho restaura a posição original.
 
 Se você ainda usa a versão 5.1, desative-a para evitar regras visuais duplicadas. Depois da primeira instalação pelo GitHub, o gerenciador poderá detectar novas versões automaticamente.
 

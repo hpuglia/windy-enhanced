@@ -1,5 +1,14 @@
 # Changelog
 
+## [6.2.0] - 2026-11-03
+
+- Movidos os atalhos do Windy Enhanced para o canto inferior esquerdo.
+- Adicionado botão rápido com ícone de vassoura para alternar o modo limpo.
+- Ampliado o modo limpo para ocultar logotipo, barras, painéis laterais e timeline do Windy.
+- Removidas globalmente as coroas Premium sem ocultar os textos ou controles associados.
+- Tornado o painel de configurações arrastável pela barra de título.
+- Removida a descrição introdutória do painel e o toggle duplicado de modo limpo.
+
 ## [6.1.0] - 2026-11-03
 
 - Adicionados links de instalação, atualização, página inicial e suporte no cabeçalho do userscript.
