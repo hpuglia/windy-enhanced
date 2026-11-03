@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Windy Enhanced - Cores, Interface e Controles
 // @namespace    https://www.windy.com/
-// @version      6.7.0
+// @version      6.7.1
 // @description  Melhora a interface do Windy com opções visuais, visualização limpa, favoritos de visualização e controles opcionais da linha do tempo.
 // @author       Henrique / Puglia Apps
 // @match        https://www.windy.com/*
@@ -23,7 +23,7 @@
 
     // Windy Enhanced 6.4 - interface local. Nenhuma requisição externa,
     // alteração de credenciais ou simulação de assinatura.
-    const VERSION = '6.7.0';
+    const VERSION = '6.7.1';
     const STORAGE_KEY = 'windy-enhanced:v6:settings';
     const ALLOWED_VIEW_ORIGINS = new Set(['https://windy.com', 'https://www.windy.com']);
     const DEFAULTS = Object.freeze({
@@ -901,7 +901,8 @@
         arrowUntil:0,arrowKey:null,subscribedKeys:[],
         eventTrace:[],playAttempts:0,
         phase:'idle',preloadPlan:[],preloadFrames:[],preloadIndex:0,
-        preloadFailures:0,preloadLoaded:0,preloadTimer:0,initialTime:null};
+        preloadFailures:0,preloadLoaded:0,preloadTimer:0,initialTime:null,
+        playObserved:null,playAttributesObserver:null};
     const WM_KEYS=['radarTimestamp','satelliteTimestamp','radsatTimestamp'];
     const WM_HOUR=/^(?:(?:há|ago)\s*)?(24|6|1)\s*h$/i;
     const WM_AERIAL=/^(?:aerial|aéreo|aérea)$/i;
@@ -1147,6 +1148,8 @@
     }
     function wmWarmNext(){
         if(!wm.playing||wm.phase!=='preloading')return;
+        if(!wm.play?.isConnected)wmFindPlay();
+        wmKeepPlayEnabled(wm.play);
         const store=wmStore(),product=wmProduct(store);
         if(!store||product!==wm.product||document.hidden||!wm.play?.isConnected){
             wmStop('Pré-carregamento cancelado por alteração da página.');return;
@@ -1279,6 +1282,8 @@
     }
     function wmTick(){
         if(!wm.playing)return;
+        if(!wm.play?.isConnected)wmFindPlay();
+        wmKeepPlayEnabled(wm.play);
         const store=wmStore(),product=wmProduct(store);
         if(!store||!product||product!==wm.product||document.hidden||!wm.play?.isConnected){
             wmStop('Replay pausado por mudança de camada ou interface.');
@@ -1405,8 +1410,45 @@
         if([1,6,24].every(h=>targets.has(h)))wm.hourEls=targets;
         return wm.hourEls;
     }
+    // O Windy costuma marcar o Play como disabled fora da janela 1h.
+    // Durante o pré-carregamento, essa alteração não deve remover a
+    // possibilidade de pausar a execução pelo próprio botão circular.
+    function wmKeepPlayEnabled(button){
+        if(!button?.isConnected)return;
+        const nodes=[button];
+        let parent=button.parentElement;
+        for(let n=0;n<2&&parent;n++,parent=parent.parentElement){
+            const r=parent.getBoundingClientRect();
+            if(r.width>85||r.height>85)break;
+            if(parent.matches('button,[role="button"],.clickable'))nodes.push(parent);
+        }
+        for(const node of nodes){
+            if(!node.hasAttribute('data-we-native-play'))node.setAttribute('data-we-native-play','1');
+            if(node.hasAttribute('disabled'))node.removeAttribute('disabled');
+            if(node.getAttribute('aria-disabled')!=='false')node.setAttribute('aria-disabled','false');
+            if(node.classList.contains('disabled'))node.classList.remove('disabled');
+        }
+    }
+    function wmWatchPlay(button){
+        if(wm.playObserved===button)return;
+        wm.playAttributesObserver?.disconnect();
+        wm.playAttributesObserver=null;
+        wm.playObserved=button;
+        if(!button)return;
+        const observer=new MutationObserver(()=>{
+            // MutationObserver fires after the site's own disabled/class
+            // updates. Never rewrites attributes that are already correct.
+            if(wm.play===button&&wm.playing)wmKeepPlayEnabled(button);
+        });
+        observer.observe(button,{attributes:true,attributeFilter:['disabled','aria-disabled','class']});
+        wm.playAttributesObserver=observer;
+    }
+
     function wmFindPlay(){
-        if(wm.playing&&wm.play?.isConnected)return;
+        if(wm.playing&&wm.play?.isConnected){
+            wmKeepPlayEnabled(wm.play);
+            return;
+        }
         const first=wm.hourEls.get(24)?.getBoundingClientRect();
         if(!first)return;
         let best=null,rank=Infinity;
@@ -1430,13 +1472,11 @@
             if(distance<rank){best=el;rank=distance;}
         }
         if(!best)return;
+        const old=wm.play;
         wm.play=best;
-        for(const node of [best,best.closest('button,[role="button"]')].filter(Boolean)){
-            node.setAttribute('data-we-native-play','1');
-            node.removeAttribute('disabled');
-            node.setAttribute('aria-disabled','false');
-            node.classList.remove('disabled');
-        }
+        wmKeepPlayEnabled(best);
+        wmWatchPlay(best);
+        if(wm.playing && old!==best)best.classList.add('we-running');
     }
     function wmControls(){
         const h=wmHoursScan();
@@ -1459,9 +1499,15 @@
             event.clientY>=r.top&&event.clientY<=r.bottom;
     }
     function wmAction(event){
+        // Button first: its icon or parent can be the pointer event target.
+        // Rectangle fallback also works if Windy disables the inner button.
+        if(wm.play && (wmAt(event,wm.play) ||
+            event.target?.closest?.('[data-we-native-play]')===wm.play ||
+            wm.play.contains?.(event.target))){
+            return {kind:'play',value:wm.play};
+        }
         for(const [h,el]of wm.hourEls)if(wmAt(event,el))return {kind:'hours',value:h};
         if(wmAt(event,wm.aerial))return {kind:'aerial'};
-        if(wmAt(event,wm.play))return {kind:'play',value:wm.play};
         return null;
     }
     function wmAerial(){
@@ -1621,6 +1667,12 @@
     }
     function initWindyNative() {
         window.addEventListener('keydown',ev=>{
+            if(ev.isTrusted&&ev.key==='Escape'&&wm.playing){
+                ev.preventDefault();
+                ev.stopImmediatePropagation();
+                wmStop('Pré-carregamento/reprodução interrompido pelo teclado.');
+                return;
+            }
             if(!ev.isTrusted||!['ArrowLeft','ArrowRight'].includes(ev.key))return;
             wm.arrowUntil=Date.now()+600;
             if(wm.playing)wmStop();
@@ -1648,7 +1700,9 @@
                 hours:wm.hours,playing:wm.playing,activeKey:wm.activeKey,
                 effectiveTimeline:wm.hours===1?'todos os quadros observados':wm.hours+'h',
                 playbackFrames:wm.plan.length,playEvents:wm.playEvents,
-                phase:wm.phase,preloadProgress:{loaded:wm.preloadLoaded,
+                phase:wm.phase,canPause:Boolean(wm.play?.isConnected),
+                playDisabled:Boolean(wm.play?.hasAttribute('disabled')),
+                preloadProgress:{loaded:wm.preloadLoaded,
                     total:wm.preloadPlan.length,position:wm.preloadIndex},
                 playAttempts:wm.playAttempts,traceEvents:wm.eventTrace.length,
                 arrowClock:wm.arrowKey,subscribedKeys:[...wm.subscribedKeys],
