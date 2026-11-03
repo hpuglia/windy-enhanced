@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Windy Enhanced - Cores, Interface e Controles
 // @namespace    https://www.windy.com/
-// @version      6.3.0
+// @version      6.4.0
 // @description  Melhora a interface do Windy com opções visuais, visualização limpa, favoritos de visualização e controles opcionais da linha do tempo.
 // @author       Henrique / Puglia Apps
 // @match        https://www.windy.com/*
@@ -20,16 +20,19 @@
 (function () {
     'use strict';
 
-    // Windy Enhanced 6.3 - interface local. Nenhuma requisição externa,
+    // Windy Enhanced 6.4 - interface local. Nenhuma requisição externa,
     // alteração de credenciais ou simulação de assinatura.
-    const VERSION = '6.3.0';
+    const VERSION = '6.4.0';
     const STORAGE_KEY = 'windy-enhanced:v6:settings';
     const ALLOWED_VIEW_ORIGINS = new Set(['https://windy.com', 'https://www.windy.com']);
     const DEFAULTS = Object.freeze({
         restoreColors: true,
         hideLogo: true,
+        hideBranding: true,
         hidePromos: true,
         shadows: true,
+        shadowIntensity: 78,
+        layersCollapsed: false,
         focusMode: false,
         savedView: null
     });
@@ -60,8 +63,13 @@
         return {
             restoreColors: typeof obj.restoreColors === 'boolean' ? obj.restoreColors : DEFAULTS.restoreColors,
             hideLogo: typeof obj.hideLogo === 'boolean' ? obj.hideLogo : DEFAULTS.hideLogo,
+            hideBranding: typeof obj.hideBranding === 'boolean' ? obj.hideBranding : DEFAULTS.hideBranding,
             hidePromos: typeof obj.hidePromos === 'boolean' ? obj.hidePromos : DEFAULTS.hidePromos,
             shadows: typeof obj.shadows === 'boolean' ? obj.shadows : DEFAULTS.shadows,
+            shadowIntensity: Number.isFinite(Number(obj.shadowIntensity))
+                ? Math.min(100, Math.max(20, Math.round(Number(obj.shadowIntensity))))
+                : DEFAULTS.shadowIntensity,
+            layersCollapsed: typeof obj.layersCollapsed === 'boolean' ? obj.layersCollapsed : DEFAULTS.layersCollapsed,
             focusMode: typeof obj.focusMode === 'boolean' ? obj.focusMode : DEFAULTS.focusMode,
             savedView: safeView(obj.savedView)
         };
@@ -74,7 +82,9 @@
 
     let settings = load();
     let panel, launcher, cleanToggle, panelClose, uiRoot, statusText, viewText;
+    let shadowRange, shadowValue, layersToggle, managedMenu;
     let dragState = null;
+    let layoutTimer = null;
     const toggles = new Map();
 
     function persist() {
@@ -165,29 +175,45 @@
             display: none !important;
         }
 
+        /* Selos institucionais exibidos sobre o mapa. A atribuição
+           cartográfica permanece intacta nos controles próprios do mapa. */
+        html.we-hide-branding #bottom-credits,
+        html.we-hide-branding .bottom-credits,
+        html.we-hide-branding [data-plugin="bottom-credits"] {
+            display: none !important;
+        }
+
         /* Sombras graduais preservam o mapa e aumentam o contraste somente
            ao redor dos grupos de interface. */
         html.we-shadows #search {
-            filter: drop-shadow(14px 18px 22px rgba(0,0,0,.42));
+            filter: drop-shadow(18px 22px var(--we-shadow-blur, 47px) rgba(0,0,0,var(--we-shadow-alpha, .81)))
+                drop-shadow(8px 10px var(--we-shadow-blur-small, 23px) rgba(0,0,0,var(--we-shadow-soft-alpha, .45)));
         }
         html.we-shadows .rhpane,
-        html.we-shadows #desktop-menu,
-        html.we-shadows [data-plugin="mobile-ui"],
-        html.we-shadows #plugin-mobile-ui {
-            filter: drop-shadow(-20px 0 26px rgba(0,0,0,.5));
+        html.we-shadows #desktop-menu {
+            filter: drop-shadow(-24px 0 var(--we-shadow-blur, 47px) rgba(0,0,0,var(--we-shadow-alpha, .81)))
+                drop-shadow(-10px 0 var(--we-shadow-blur-small, 23px) rgba(0,0,0,var(--we-shadow-soft-alpha, .45)));
         }
-        html.we-shadows #bottom-wrapper,
         html.we-shadows [data-plugin="bottom-controls-desktop"],
         html.we-shadows [data-plugin="bottom-controls-mobile"],
         html.we-shadows .metric-legend {
-            filter: drop-shadow(0 -18px 25px rgba(0,0,0,.46));
+            filter: drop-shadow(0 -24px var(--we-shadow-blur, 47px) rgba(0,0,0,var(--we-shadow-alpha, .81)))
+                drop-shadow(0 -10px var(--we-shadow-blur-small, 23px) rgba(0,0,0,var(--we-shadow-soft-alpha, .45)));
         }
         html.we-shadows .leaflet-control-container,
         html.we-shadows .maplibregl-control-container {
-            filter: drop-shadow(0 8px 18px rgba(0,0,0,.48));
+            filter: drop-shadow(0 10px var(--we-shadow-blur-small, 23px) rgba(0,0,0,var(--we-shadow-alpha, .81)));
         }
         html.we-shadows #we-quick-controls {
-            filter: drop-shadow(0 0 16px rgba(0,0,0,.65));
+            filter: drop-shadow(0 0 var(--we-shadow-blur-small, 23px) rgba(0,0,0,var(--we-shadow-alpha, .81)));
+        }
+
+        html.we-layers-collapsed .map-selector,
+        html.we-layers-collapsed #plugin-map-selector,
+        html.we-layers-collapsed [data-plugin="map-selector"],
+        html.we-layers-collapsed [data-plugin="overlay-selector"],
+        html.we-layers-collapsed [data-we-layer-list="1"] {
+            display: none !important;
         }
 
         #we-root { position: fixed; left: 14px; bottom: 14px; z-index: 2147483645;
@@ -206,8 +232,10 @@
         #we-panel { pointer-events: auto; position: fixed; display: none;
             left: 14px; bottom: 66px; width: min(355px, calc(100vw - 28px));
             max-height: min(76vh, 680px); overflow-y: auto; margin: 0;
+            scrollbar-width: none; -ms-overflow-style: none;
             background: #121d30; color: #edf3fa; border: 1px solid #405270;
             border-radius: 15px; padding: 15px; box-shadow: 0 13px 35px rgba(0,0,0,.44); }
+        #we-panel::-webkit-scrollbar { display: none; width: 0; height: 0; }
         #we-panel.we-open { display: block; }
         #we-panel.we-dragging { user-select: none; box-shadow: 0 18px 44px rgba(0,0,0,.55); }
         #we-panel .we-header { display: flex; justify-content: space-between; align-items: center;
@@ -226,6 +254,11 @@
         #we-panel .we-setting small { display: block; color: #abbcd1; margin-top: 3px; font-size: 11px; }
         #we-panel input[type="checkbox"] { appearance: auto; width: 18px; height: 18px; margin: 0;
             accent-color: #61a8ff; flex-shrink: 0; cursor: pointer; }
+        #we-panel .we-range-setting { padding: 2px 0 11px; border-bottom: 1px solid #2e3d54; }
+        #we-panel .we-range-header { display: flex; align-items: center; justify-content: space-between;
+            color: #abbcd1; font-size: 11px; margin-bottom: 5px; }
+        #we-panel input[type="range"] { appearance: auto; width: 100%; margin: 0; accent-color: #61a8ff; cursor: pointer; }
+        #we-panel input[type="range"]:disabled { opacity: .4; cursor: not-allowed; }
         #we-panel .we-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
         #we-panel button.we-action { appearance: none; background: #273b58; color: #f8faff;
             border: 1px solid #526b8d; border-radius: 9px; padding: 9px 7px; font: inherit;
@@ -241,6 +274,12 @@
         #we-panel .we-detail { font-size: 11px; color: #acbdd2; margin: 5px 0 10px; overflow-wrap: anywhere; }
         #we-panel kbd { padding: 1px 5px; border: 1px solid #6b7c95; border-radius: 4px; color: #fff; font: inherit; }
         #we-import { display: none !important; }
+        #we-layers-toggle { position: fixed; z-index: 2147483644; display: flex; align-items: center;
+            justify-content: center; width: 42px; height: 30px; border-radius: 9px;
+            border: 1px solid rgba(255,255,255,.38); background: rgba(18,29,48,.9); color: #fff;
+            box-shadow: 0 5px 18px rgba(0,0,0,.45); font: 700 22px/1 system-ui,sans-serif;
+            cursor: pointer; backdrop-filter: blur(7px); }
+        #we-layers-toggle:hover, #we-layers-toggle:focus-visible { background: rgba(37,61,95,.96); }
         @media (max-width: 600px) {
             #we-root { left: 9px; bottom: 9px; }
             #we-launcher, #we-clean-toggle { width: 39px; height: 39px; }
@@ -251,13 +290,30 @@
     function applySettings() {
         const html = document.documentElement;
         if (html) {
+            const intensity = settings.shadowIntensity / 100;
             html.classList.toggle('we-hide-promos', settings.hidePromos);
             html.classList.toggle('we-restore-colors', settings.restoreColors);
             html.classList.toggle('we-hide-logo', settings.hideLogo);
+            html.classList.toggle('we-hide-branding', settings.hideBranding);
             html.classList.toggle('we-shadows', settings.shadows);
+            html.classList.toggle('we-layers-collapsed', settings.layersCollapsed);
             html.classList.toggle('we-focus', settings.focusMode);
+            html.style.setProperty('--we-shadow-alpha', (0.38 + intensity * 0.55).toFixed(2));
+            html.style.setProperty('--we-shadow-soft-alpha', (0.18 + intensity * 0.35).toFixed(2));
+            html.style.setProperty('--we-shadow-blur', `${Math.round(24 + intensity * 30)}px`);
+            html.style.setProperty('--we-shadow-blur-small', `${Math.round(12 + intensity * 14)}px`);
         }
         for (const [name, input] of toggles) input.checked = settings[name];
+        if (shadowRange) {
+            shadowRange.value = String(settings.shadowIntensity);
+            shadowRange.disabled = !settings.shadows;
+        }
+        if (shadowValue) shadowValue.textContent = `${settings.shadowIntensity}%`;
+        if (layersToggle) {
+            layersToggle.textContent = settings.layersCollapsed ? '+' : '−';
+            layersToggle.setAttribute('aria-expanded', String(!settings.layersCollapsed));
+            layersToggle.title = settings.layersCollapsed ? 'Mostrar tipos de mapas' : 'Recolher tipos de mapas';
+        }
         if (cleanToggle) {
             cleanToggle.setAttribute('aria-pressed', String(settings.focusMode));
             cleanToggle.title = settings.focusMode ? 'Desativar modo limpo' : 'Ativar modo limpo';
@@ -342,6 +398,33 @@
         label.append(copy, checkbox);
         parent.appendChild(label);
         toggles.set(name, checkbox);
+    }
+
+    function addShadowRange(parent) {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'we-range-setting';
+        const header = document.createElement('div');
+        header.className = 'we-range-header';
+        const label = document.createElement('span');
+        label.textContent = 'Intensidade do degradê';
+        shadowValue = document.createElement('output');
+        header.append(label, shadowValue);
+        shadowRange = document.createElement('input');
+        shadowRange.type = 'range';
+        shadowRange.min = '20';
+        shadowRange.max = '100';
+        shadowRange.step = '1';
+        shadowRange.setAttribute('aria-label', 'Intensidade das sombras');
+        shadowRange.addEventListener('input', () => {
+            settings.shadowIntensity = Number(shadowRange.value);
+            applySettings();
+        });
+        shadowRange.addEventListener('change', () => {
+            persist();
+            setStatus(`Intensidade das sombras: ${settings.shadowIntensity}%.`);
+        });
+        wrapper.append(header, shadowRange);
+        parent.appendChild(wrapper);
     }
 
     function section(parent, title) {
@@ -484,6 +567,106 @@
         keepPanelInViewport();
     }
 
+    function visibleElement(selectors) {
+        for (const selector of selectors) {
+            for (const element of document.querySelectorAll(selector)) {
+                const rect = element.getBoundingClientRect();
+                if (rect.width > 0 && rect.height > 0) return element;
+            }
+        }
+        return null;
+    }
+
+    function locateLayerList() {
+        const direct = document.querySelector(
+            '.map-selector, #plugin-map-selector, [data-plugin="map-selector"], [data-plugin="overlay-selector"]'
+        );
+        if (direct) {
+            direct.setAttribute('data-we-layer-list', '1');
+            return direct;
+        }
+        const controls = document.querySelectorAll('button,a,[role="button"],.clickable');
+        const moreLayers = [...controls].find(element =>
+            /^(?:mais camadas|more layers)/i.test((element.textContent || '').replace(/\s+/g, ' ').trim())
+        );
+        let candidate = moreLayers?.parentElement || null;
+        while (candidate && candidate !== document.body) {
+            const rect = candidate.getBoundingClientRect();
+            const clickableCount = candidate.querySelectorAll('button,a,[role="button"],.clickable').length;
+            if (rect.height >= 180 && rect.width > 0 && rect.width <= 420 && clickableCount >= 5) {
+                candidate.setAttribute('data-we-layer-list', '1');
+                return candidate;
+            }
+            candidate = candidate.parentElement;
+        }
+        return null;
+    }
+
+    function ensureLayersToggle() {
+        if (layersToggle) return;
+        layersToggle = document.createElement('button');
+        layersToggle.id = 'we-layers-toggle';
+        layersToggle.type = 'button';
+        layersToggle.setAttribute('aria-label', 'Mostrar ou recolher tipos de mapas');
+        layersToggle.addEventListener('click', () => {
+            settings.layersCollapsed = !settings.layersCollapsed;
+            persist();
+            applySettings();
+            setStatus(settings.layersCollapsed ? 'Tipos de mapas recolhidos.' : 'Tipos de mapas exibidos.');
+            scheduleWindyLayout();
+        });
+        document.body.appendChild(layersToggle);
+        applySettings();
+    }
+
+    function arrangeWindyControls() {
+        locateLayerList();
+        const menu = visibleElement([
+            '[data-ref="mobileHamburgerMenu"]',
+            '.mobile-ui__hamburger-icon'
+        ]);
+        const avatar = visibleElement([
+            '#mobile-avatar',
+            '.mobile-ui__avatar',
+            '[data-ref="mobileAvatar"]',
+            '[data-ref="avatar"]'
+        ]);
+        if (!menu || !avatar) {
+            if (layersToggle) layersToggle.hidden = true;
+            return;
+        }
+        if (managedMenu && managedMenu !== menu) {
+            for (const property of ['position', 'left', 'top', 'right', 'bottom', 'margin', 'z-index', 'transform']) {
+                managedMenu.style.removeProperty(property);
+            }
+        }
+        managedMenu = menu;
+        const avatarRect = avatar.getBoundingClientRect();
+        const menuRect = menu.getBoundingClientRect();
+        const gap = 8;
+        menu.style.position = 'fixed';
+        menu.style.left = `${Math.max(8, avatarRect.left - menuRect.width - gap)}px`;
+        menu.style.top = `${Math.max(8, avatarRect.top + (avatarRect.height - menuRect.height) / 2)}px`;
+        menu.style.right = 'auto';
+        menu.style.bottom = 'auto';
+        menu.style.margin = '0';
+        menu.style.transform = 'none';
+        menu.style.zIndex = '2147483643';
+
+        ensureLayersToggle();
+        layersToggle.hidden = false;
+        layersToggle.style.left = `${Math.max(8, avatarRect.left + (avatarRect.width - 42) / 2)}px`;
+        layersToggle.style.top = `${Math.min(window.innerHeight - 38, avatarRect.bottom + gap)}px`;
+    }
+
+    function scheduleWindyLayout() {
+        if (layoutTimer !== null) return;
+        layoutTimer = window.setTimeout(() => {
+            layoutTimer = null;
+            arrangeWindyControls();
+        }, 180);
+    }
+
     function togglePanel(force) {
         if (!panel || !launcher) return;
         const willOpen = typeof force === 'boolean' ? force : !panel.classList.contains('we-open');
@@ -557,8 +740,10 @@
         section(panel, 'Visual');
         addSetting(panel, 'restoreColors', 'Cores do mapa', 'Remove filtros visuais locais quando presentes.');
         addSetting(panel, 'hideLogo', 'Ocultar logotipo superior', 'Remove apenas a marca Windy.com do topo da tela.');
+        addSetting(panel, 'hideBranding', 'Remover branding', 'Oculta selos institucionais sobrepostos ao mapa.');
         addSetting(panel, 'hidePromos', 'Ocultar chamadas Premium', 'Esconde banners e botões promocionais reconhecidos.');
         addSetting(panel, 'shadows', 'Sombras', 'Cria contraste suave entre o mapa e os grupos de controles.');
+        addShadowRange(panel);
 
         section(panel, 'Linha do tempo');
         const timeButtons = document.createElement('div');
@@ -635,7 +820,10 @@
         }
     }, true);
 
-    window.addEventListener('resize', () => window.requestAnimationFrame(keepPanelInViewport));
+    window.addEventListener('resize', () => {
+        window.requestAnimationFrame(keepPanelInViewport);
+        scheduleWindyLayout();
+    });
 
     if (typeof GM_registerMenuCommand === 'function') {
         GM_registerMenuCommand('Windy Enhanced — configurações', () => togglePanel(true));
@@ -647,6 +835,7 @@
         settings = load();
         applySettings();
         if (settings.hidePromos) scheduleScan(document.body);
+        scheduleWindyLayout();
         setStatus('Preferências sincronizadas de outra aba.');
     });
 
@@ -654,11 +843,16 @@
         applySettings();
         initUI();
         scheduleScan(document.body);
+        scheduleWindyLayout();
         const observer = new MutationObserver(records => {
-            if (!settings.hidePromos) return;
+            let hasAddedElement = false;
             for (const record of records) {
-                for (const node of record.addedNodes) scheduleScan(node);
+                for (const node of record.addedNodes) {
+                    if (node.nodeType === 1) hasAddedElement = true;
+                    if (settings.hidePromos) scheduleScan(node);
+                }
             }
+            if (hasAddedElement) scheduleWindyLayout();
         });
         observer.observe(document.body, { childList: true, subtree: true });
     }

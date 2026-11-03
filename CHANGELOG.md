@@ -1,5 +1,13 @@
 # Changelog
 
+## [6.4.0] - 2026-11-03
+
+- Ocultada a barra visual de rolagem do painel, preservando rolagem por mouse, toque e teclado.
+- Adicionado controle de intensidade para sombras mais suaves e escuras.
+- Reposicionado o botão nativo Menu ao lado esquerdo do avatar quando essa interface estiver disponível.
+- Adicionado botão `−`/`+` para recolher ou revelar a lista de tipos de mapas, com estado persistente.
+- Adicionada opção `Remover branding`, ativada por padrão, para ocultar selos institucionais sobre o mapa.
+
 ## [6.3.0] - 2026-11-03
 
 - Adicionada opção independente para ocultar o logotipo superior do Windy, ativada por padrão.

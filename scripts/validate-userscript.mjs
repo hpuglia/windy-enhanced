@@ -30,5 +30,9 @@ assert.ok(!script.includes('\uFFFD'), 'O userscript contém caracteres de substi
 assert.ok(script.includes('html.we-hide-promos .premium-flag'), 'Seletor global das coroas Premium ausente.');
 assert.ok(!script.includes(':has(.premium-flag)'), 'Não oculte controles inteiros para remover a coroa Premium.');
 assert.match(script, /hideLogo:\s*true/, 'A ocultação padrão do logotipo deve permanecer ativa.');
+assert.match(script, /hideBranding:\s*true/, 'A remoção de branding deve permanecer ativa por padrão.');
+assert.ok(script.includes('html.we-hide-branding #bottom-credits'), 'Seletor do branding sobreposto ausente.');
 assert.match(script, /shadows:\s*true/, 'As sombras devem permanecer ativas por padrão.');
+assert.match(script, /shadowIntensity:\s*78/, 'A intensidade padrão das sombras deve permanecer em 78%.');
+assert.ok(script.includes('id = \'we-layers-toggle\''), 'Botão de recolher tipos de mapas ausente.');
 console.log(`Windy Enhanced v${version}: metadados e documentação validados.`);
