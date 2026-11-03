@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Windy Enhanced - Cores, Interface e Controles
 // @namespace    https://www.windy.com/
-// @version      6.6.2
+// @version      6.7.0
 // @description  Melhora a interface do Windy com opções visuais, visualização limpa, favoritos de visualização e controles opcionais da linha do tempo.
 // @author       Henrique / Puglia Apps
 // @match        https://www.windy.com/*
@@ -23,7 +23,7 @@
 
     // Windy Enhanced 6.4 - interface local. Nenhuma requisição externa,
     // alteração de credenciais ou simulação de assinatura.
-    const VERSION = '6.6.2';
+    const VERSION = '6.7.0';
     const STORAGE_KEY = 'windy-enhanced:v6:settings';
     const ALLOWED_VIEW_ORIGINS = new Set(['https://windy.com', 'https://www.windy.com']);
     const DEFAULTS = Object.freeze({
@@ -899,7 +899,9 @@
         plan:[],planKey:null,lastTarget:null,failures:0,recordedMax:null,
         playEvents:0,segmentFailures:0,eventsStore:null,
         arrowUntil:0,arrowKey:null,subscribedKeys:[],
-        eventTrace:[],playAttempts:0};
+        eventTrace:[],playAttempts:0,
+        phase:'idle',preloadPlan:[],preloadFrames:[],preloadIndex:0,
+        preloadFailures:0,preloadLoaded:0,preloadTimer:0,initialTime:null};
     const WM_KEYS=['radarTimestamp','satelliteTimestamp','radsatTimestamp'];
     const WM_HOUR=/^(?:(?:há|ago)\s*)?(24|6|1)\s*h$/i;
     const WM_AERIAL=/^(?:aerial|aéreo|aérea)$/i;
@@ -1063,6 +1065,164 @@
             merged.set(current,{time:current,key,segment:wmSegment(store)});
         return [...merged.values()].sort((a,b)=>a.time-b.time).slice(-650);
     }
+    // Busca metadados do calendário que a página já disponibiliza. Não baixa
+    // imagens manualmente nem acessa endpoints Premium: a renderização é do Windy.
+    function wmCalendarFrames(store,product,key){
+        const dates=new Set();
+        const now=Date.now();
+        function add(value){
+            let t=Number(value);
+            if(!Number.isFinite(t))return;
+            if(t>1e9&&t<1e11)t*=1000; // seconds -> milliseconds
+            if(t>=now-27*3600000&&t<=now+80*60000)dates.add(t);
+        }
+        function collect(value,level=0){
+            if(level>3||value==null||dates.size>600)return;
+            if(typeof value==='number'){add(value);return;}
+            if(Array.isArray(value)){
+                for(const entry of value.slice(0,650))collect(entry,level+1);
+                return;
+            }
+            if(typeof value!=='object')return;
+            for(const name of ['time','timestamp','ts','epochMs','epoch','date']){
+                if(Object.prototype.hasOwnProperty.call(value,name))add(value[name]);
+            }
+            const nested=['timestamps','times','frames','available','availableTimes',
+                'past','nowcast','forecast','radar','satellite','data','items','list'];
+            for(const name of nested)try{
+                if(value[name]!=null)collect(value[name],level+1);
+            }catch(_){}
+            const keys=Object.keys(value);
+            if(keys.length>0&&keys.length<=650){
+                for(const name of keys){
+                    if(/^\d{10,13}$/.test(name))add(name);
+                }
+            }
+        }
+        try{
+            if(typeof store.getAllowed==='function')collect(store.getAllowed(key));
+        }catch(_){}
+        const name=product==='radar'?'radarCalendar':'satelliteCalendar';
+        try{collect(store.get(name));}catch(_){}
+        return [...dates].sort((a,b)=>a-b);
+    }
+    function wmWarmPlan(store,product,key){
+        const now=Date.now(),current=wmTime(store.get(key));
+        if(current===null)return [];
+        const observed=wmSequence(product,-Infinity,key).map(f=>f.time);
+        const calendar=wmCalendarFrames(store,product,key);
+        const available=[...new Set([...observed,...calendar,current])].sort((a,b)=>a-b);
+        let earliest=available[0],latest=available[available.length-1];
+        // O início já selecionado manualmente e o intervalo escolhido na barra
+        // são os limites. Evita voltar arbitrariamente a períodos desconhecidos.
+        if(wm.hours>1)earliest=Math.min(earliest,now-wm.hours*3600000);
+        latest=Math.max(latest,Math.min(now+55*60000,
+            calendar.some(t=>t>now)?Math.max(...calendar):now));
+        earliest=Math.max(now-25*3600000,earliest);
+        latest=Math.min(now+70*60000,latest);
+        if(latest<=earliest)return [];
+        const steps=available.slice(1).map((v,i)=>v-available[i]).filter(v=>v>=60000&&v<=20*60000).sort((a,b)=>a-b);
+        // Fallback do relógio: intervalos de 10 minutos, não 1 passo por tile.
+        // Quando houver calendário, usar exclusivamente os horários informados.
+        const cadence=steps.length?Math.max(60000,steps[Math.floor(steps.length/2)]):10*60000;
+        const maxFrames=180;
+        let frames=[];
+        if(calendar.length>=3){
+            frames=[...new Set([...calendar,...observed,current])].filter(t=>t>=earliest&&t<=latest);
+        } else {
+            const step=Math.max(cadence,Math.ceil((latest-earliest)/maxFrames/60000)*60000);
+            for(let time=earliest;time<=latest&&frames.length<maxFrames;time+=step)frames.push(time);
+            frames.push(...available,latest);
+        }
+        const snapshots=wm.segments[product].get(key);
+        return [...new Set(frames.filter(t=>t>=earliest&&t<=latest))].sort((a,b)=>a-b)
+            .slice(0,maxFrames).map(time=>({key,time,segment:snapshots?.get(time)}));
+    }
+    function wmWarmNext(){
+        if(!wm.playing||wm.phase!=='preloading')return;
+        const store=wmStore(),product=wmProduct(store);
+        if(!store||product!==wm.product||document.hidden||!wm.play?.isConnected){
+            wmStop('Pré-carregamento cancelado por alteração da página.');return;
+        }
+        if(wm.preloadIndex>=wm.preloadPlan.length){
+            if(wm.preloadFrames.length<2){
+                wmStop('O Windy não carregou quadros suficientes para animação.');return;
+            }
+            wm.plan=wm.preloadFrames.slice();
+            wm.phase='playing';
+            wm.preloadLoaded=wm.plan.length;
+            const first=wm.plan[0];
+            try{
+                if(!wmSetFrame(store,first)){
+                    wmStop('Não foi possível retornar ao primeiro quadro.');return;
+                }
+            }catch(_){wmStop('Falha ao restaurar o início da timeline.');return;}
+            wmTrace('preload-completed',{loaded:wm.plan.length,requested:wm.preloadPlan.length});
+            setStatus('Pré-carregamento concluído ('+wm.plan.length+' quadros). Reproduzindo desde o início.');
+            wm.timer=setTimeout(wmTick,Math.max(450,wmSpeed(store)));
+            return;
+        }
+        const frame=wm.preloadPlan[wm.preloadIndex++];
+        let changed=false;
+        try{
+            wmStopOriginalAnimation(store);
+            changed=wmSetFrame(store,frame);
+        }catch(_){}
+        if(!changed){
+            wm.preloadFailures++;
+            if(wm.preloadFailures>=4){
+                wmStop('O Windy recusou quatro quadros seguidos: pré-carregamento interrompido.');
+                return;
+            }
+            wm.timer=setTimeout(wmWarmNext,350);
+            return;
+        }
+        const started=Date.now(),maxWait=4800;
+        let readyChecks=0;
+        const check=()=>{
+            if(!wm.playing||wm.phase!=='preloading')return;
+            if(wmStore()!==store||wmProduct(store)!==product||document.hidden){
+                wmStop('Pré-carregamento pausado por mudança de mapa.');return;
+            }
+            let selected=null,rendered=null,loading=false;
+            try{
+                selected=wmTime(store.get(frame.key));
+                rendered=wmTime(store.get('lastRenderedTimestamp'));
+                loading=store.get('tileLayerLoaderPresent')===true;
+            }catch(_){}
+            if(selected===null||Math.abs(selected-frame.time)>60000){
+                wmStop('O Windy alterou o horário durante o pré-carregamento.');return;
+            }
+            const waited=Date.now()-started;
+            const renderedOk=rendered===null||Math.abs(rendered-frame.time)<=60000;
+            const settled=!loading&&renderedOk;
+            if(settled&&waited>=320)readyChecks++;else readyChecks=0;
+            if(readyChecks>=2||(rendered===null&&!loading&&waited>=850)){
+                wm.preloadFrames.push(frame);
+                wm.preloadLoaded=wm.preloadFrames.length;
+                wm.preloadFailures=0;
+                wmObserve();
+                if(wm.preloadIndex%12===0||wm.preloadIndex===wm.preloadPlan.length){
+                    setStatus('Preparando quadros: '+wm.preloadIndex+'/'+wm.preloadPlan.length+'.');
+                }
+                wm.timer=setTimeout(wmWarmNext,250);
+                return;
+            }
+            if(waited>=maxWait){
+                wm.preloadFailures++;
+                wmTrace('preload-timeout',{time:frame.time,key:frame.key});
+                if(wm.preloadFailures>=4){
+                    wmStop('Quadros indisponíveis ou lentos: pré-carregamento interrompido.');
+                    return;
+                }
+                wm.timer=setTimeout(wmWarmNext,350);
+                return;
+            }
+            wm.timer=setTimeout(check,120);
+        };
+        wm.timer=setTimeout(check,120);
+    }
+
     function wmSpeed(store){
         let speed;try{speed=store.get('animationSpeed');}catch(_){}
         if(typeof speed==='number'&&speed>0&&Number.isFinite(speed))
@@ -1101,6 +1261,8 @@
         wm.play?.classList.remove('we-running');
         wm.activeKey=null;
         wm.planKey=null;wm.plan=[];wm.lastTarget=null;wm.failures=0;
+        wm.phase='idle';wm.preloadPlan=[];wm.preloadFrames=[];wm.preloadIndex=0;
+        wm.preloadFailures=0;
         if(message){wm.reason=message;setStatus(message);wmTrace('replay-stopped',{reason:message});}
     }
     function wmStepSynthetic(){
@@ -1189,47 +1351,37 @@
         wm.timer=setTimeout(render,100);
     }
     function wmPlayStart(event,button){
-        wm.playAttempts++;
         const store=wmStore(),product=wmProduct(store);
-        wmTrace('play-attempt',{product,playing:wm.playing,clock:wm.arrowKey});
         if(!product)return false;
-        // Always consume the original Play in Radar/Satellite. Previously a
-        // lack of sampled frames passed it to Windy, which snapped to last 1h.
         event.preventDefault();event.stopImmediatePropagation();
+        wm.playAttempts++;
+        wmTrace('play-attempt',{product,phase:wm.phase,clock:wm.arrowKey});
         if(wm.playing){
-            wmStop('Reprodução pausada.');
+            wmStop('Reprodução ou preparação pausada.');
             return true;
         }
+        wmSubscribeStore();
         wmObserve();
         const key=wmKey(store,product);
         if(!key){
-            setStatus('O Windy não expôs o relógio da camada de radar.');
-            return true;
+            setStatus('Relógio temporal do Windy não disponível.');return true;
         }
-        const plan=wmBuildPlan(store,product,key);
+        let initial=null;
+        try{initial=wmTime(store.get(key));}catch(_){}
+        if(initial===null){setStatus('Horário atual indisponível.');return true;}
+        const plan=wmWarmPlan(store,product,key);
         if(plan.length<2){
-            wmTrace('play-no-frames',{key,count:plan.length});
-            setStatus('Posicione a timeline no início e no fim usando as setas, para registrar o intervalo.');
-            return true;
+            setStatus('Sem intervalos disponíveis para carregar na timeline.');return true;
         }
-        // Some Windy builds reset the timestamp when animation is stopped.
-        // Restore the timestamp chosen by the user before beginning playback.
-        let chosenTime=null;
-        try{chosenTime=wmTime(store.get(key));}catch(_){}
-        if(chosenTime===null){setStatus('Horário do radar não disponível.');return true;}
         wmStopOriginalAnimation(store);
-        try{
-            const afterStop=wmTime(store.get(key));
-            if(afterStop!==null && Math.abs(afterStop-chosenTime)>30000)
-                store.set(key,chosenTime);
-        }catch(_){}
-        wm.plan=plan;wm.planKey=key;wm.activeKey=key;
-        wm.playing=true;wm.product=product;wm.play=button;
-        wm.failures=0;wm.playEvents++;
+        wm.product=product;wm.planKey=key;wm.activeKey=key;wm.play=button;
+        wm.initialTime=initial;wm.plan=[];wm.preloadPlan=plan;wm.preloadFrames=[];
+        wm.preloadIndex=0;wm.preloadFailures=0;wm.preloadLoaded=0;
+        wm.playing=true;wm.phase='preloading';wm.playEvents++;
         button.classList.add('we-running');
-        wm.timer=setTimeout(wmTick,70);
-        wmTrace('play-started',{key,frames:plan.length,first:plan[0].time,last:plan[plan.length-1].time});
-        setStatus('Replay contínuo iniciado: '+plan.length+' quadros no mesmo relógio.');
+        wmTrace('preload-started',{key,frames:plan.length,first:plan[0].time,last:plan[plan.length-1].time});
+        setStatus('Preparando '+plan.length+' quadros antes de reproduzir.');
+        wm.timer=setTimeout(wmWarmNext,80);
         return true;
     }
     function wmHoursScan(){
@@ -1481,6 +1633,7 @@
             const p=typeof unsafeWindow!=='undefined'?unsafeWindow:window;
             Object.defineProperty(p,'WindyEnhancedTrace',{configurable:true,value:()=>({
                 version:VERSION,playAttempts:wm.playAttempts,events:[...wm.eventTrace],
+                preloading:{phase:wm.phase,loaded:wm.preloadLoaded,total:wm.preloadPlan.length},
                 store:wmStoreTrace(),buttonFound:Boolean(wm.play?.isConnected)
             })});
             Object.defineProperty(p,'WindyEnhancedStatus',{configurable:true,value:()=>({
@@ -1488,6 +1641,8 @@
                 hours:wm.hours,playing:wm.playing,activeKey:wm.activeKey,
                 effectiveTimeline:wm.hours===1?'todos os quadros observados':wm.hours+'h',
                 playbackFrames:wm.plan.length,playEvents:wm.playEvents,
+                phase:wm.phase,preloadProgress:{loaded:wm.preloadLoaded,
+                    total:wm.preloadPlan.length,position:wm.preloadIndex},
                 playAttempts:wm.playAttempts,traceEvents:wm.eventTrace.length,
                 arrowClock:wm.arrowKey,subscribedKeys:[...wm.subscribedKeys],
                 playFound:Boolean(wm.play?.isConnected),
