@@ -1174,7 +1174,17 @@
             }
             if(settings.hideBranding&&/^Outdoor maps provided by Mapy\.com$/i.test(wmText(el))&&
                ![...el.children].some(x=>/^Outdoor maps provided by Mapy\.com$/i.test(wmText(x))))
-                el.setAttribute('data-we-mapy-selector-heading','1');
+                {
+                    let target=el;
+                    for(let parent=el.parentElement,n=0;parent&&n<3;parent=parent.parentElement,n++){
+                        const rect=parent.getBoundingClientRect();
+                        if(rect.width>=180&&rect.width<=500&&rect.height<=75&&
+                            /mapy\.com/i.test(wmText(parent))){
+                            target=parent;break;
+                        }
+                    }
+                    target.setAttribute('data-we-mapy-selector-heading','1');
+                }
         }
     }
     function wmScanModal(root){
