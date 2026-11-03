@@ -1,74 +1,110 @@
-# Windy Enhanced
+<p align="center">
+  <img src="assets/banner.svg" alt="Windy Enhanced — mais controle, foco e conforto visual no Windy.com" width="100%">
+</p>
 
-Userscript independente para personalizar a interface do [Windy.com](https://www.windy.com/) no navegador. Compatível com gerenciadores de userscripts como Tampermonkey.
+<p align="center">
+  <a href="https://github.com/hpuglia/windy-enhanced/releases/latest"><img alt="Última versão" src="https://img.shields.io/github/v/release/hpuglia/windy-enhanced?style=for-the-badge&color=2b9eb3"></a>
+  <a href="https://github.com/hpuglia/windy-enhanced/actions/workflows/validate.yml"><img alt="Validação" src="https://img.shields.io/github/actions/workflow/status/hpuglia/windy-enhanced/validate.yml?style=for-the-badge&label=valida%C3%A7%C3%A3o"></a>
+  <a href="LICENSE"><img alt="Licença MIT" src="https://img.shields.io/github/license/hpuglia/windy-enhanced?style=for-the-badge&color=4c78a8"></a>
+</p>
 
-> Projeto não oficial, sem vínculo com Windy.com. O script altera somente a apresentação local da página. **Não concede assinatura Premium, acesso a dados restritos, resolução adicional nem mais horários de previsão no servidor.**
+<p align="center">
+  Userscript independente para personalizar a interface do <a href="https://www.windy.com/">Windy.com</a>, reduzir distrações e facilitar o acesso aos controles mais usados.
+</p>
 
-## Instalação
+<p align="center">
+  <a href="https://raw.githubusercontent.com/hpuglia/windy-enhanced/main/windy-enhanced.user.js"><strong>⚡ Instalar Windy Enhanced</strong></a>
+  ·
+  <a href="https://github.com/hpuglia/windy-enhanced/releases/latest">Ver release</a>
+  ·
+  <a href="https://github.com/hpuglia/windy-enhanced/issues">Relatar problema</a>
+</p>
 
-1. Instale um gerenciador de userscripts compatível (por exemplo, Tampermonkey).
-2. [Clique aqui para instalar o Windy Enhanced](https://raw.githubusercontent.com/hpuglia/windy-enhanced/main/windy-enhanced.user.js) e confirme a instalação no Tampermonkey.
-3. Salve e visite `https://www.windy.com/`.
-4. Desative a versão 5.1 anterior para não sobrepor regras de CSS.
-5. Abra o painel pelo botão **⚙** no canto superior direito.
+> [!IMPORTANT]
+> Este é um projeto não oficial e sem vínculo com o Windy.com. Ele altera apenas a apresentação local da página: não concede assinatura Premium, não acessa dados restritos e não modifica sua conta.
 
-As atualizações são detectadas pelo gerenciador de userscripts por meio dos metadados `@updateURL` e `@downloadURL`.
+## ✨ O que ele oferece
 
-## Recursos da versão 6.1.0
-
-| Recurso | Descrição |
+| Recurso | Como ajuda |
 | --- | --- |
-| Cores do mapa | Preserva a correção visual da 5.1 para filtros CSS de tons de cinza, onde presentes. |
-| Chamadas Premium | Esconde seletivamente botões e banners promocionais reconhecidos. |
-| Modo visualização limpa | Oculta alguns painéis auxiliares; o mapa e a timeline permanecem acessíveis. |
-| Painel configurável | Liga/desliga recursos sem editar código. |
-| Vista salva | Guarda a **URL atual** no navegador e pode reabri-la. Os detalhes preservados dependem do que o Windy codifica na URL. |
-| Importação/exportação | Preferências em arquivo JSON. |
-| Controles de horário | Botões anterior/próximo somente quando o site expõe uma interface de tempo compatível; se não, use as setas do Windy. |
-| Observador otimizado | Examina apenas elementos novos do DOM, com agrupamento de eventos. |
-| Sincronização entre abas | Reaplica preferências alteradas em outra aba aberta do Windy. |
+| 🎨 **Cores do mapa** | Remove filtros visuais locais de tons de cinza quando presentes. |
+| 🧹 **Interface mais limpa** | Oculta chamadas promocionais reconhecidas e painéis auxiliares opcionais. |
+| ⚙️ **Painel configurável** | Ativa ou desativa cada recurso sem precisar editar o código. |
+| ⭐ **Vista salva** | Guarda a URL atual do Windy e permite reabri-la depois. |
+| ↔️ **Linha do tempo** | Oferece botões de horário quando o site expõe uma interface compatível. |
+| 💾 **Backup em JSON** | Exporta, importa ou restaura suas preferências localmente. |
+| 🔄 **Sincronização entre abas** | Reaplica alterações feitas em outra aba aberta do Windy. |
+| ♿ **Acessibilidade** | Inclui navegação por teclado, gerenciamento de foco e avisos para leitores de tela. |
 
-O painel pode ser fechado pelo botão **×** ou pela tecla `Esc`, possui identificação adequada para leitores de tela e restaura o foco ao botão de abertura.
+Tudo funciona localmente no navegador, sem bibliotecas externas e sem envio de dados.
 
-### Atalhos
+## 🚀 Instalação
+
+1. Instale o [Tampermonkey](https://www.tampermonkey.net/) ou outro gerenciador de userscripts compatível.
+2. Clique em **[Instalar Windy Enhanced](https://raw.githubusercontent.com/hpuglia/windy-enhanced/main/windy-enhanced.user.js)**.
+3. Confirme a instalação no gerenciador.
+4. Acesse [Windy.com](https://www.windy.com/) e abra o painel pelo botão **⚙**.
+
+Se você ainda usa a versão 5.1, desative-a para evitar regras visuais duplicadas. Depois da primeira instalação pelo GitHub, o gerenciador poderá detectar novas versões automaticamente.
+
+## ⌨️ Atalhos
 
 | Atalho | Ação |
 | --- | --- |
-| `Alt + Shift + E` | Abrir/fechar painel Enhanced |
-| `Alt + Shift + L` | Ativar/desativar modo visualização limpa |
-| `←` / `→` | Atalhos nativos de tempo do Windy (sujeitos à versão do site) |
-| `+` / `-` | Zoom nativo do Windy |
+| `Alt + Shift + E` | Abrir ou fechar o painel do Windy Enhanced |
+| `Alt + Shift + L` | Ativar ou desativar o modo de visualização limpa |
+| `Esc` | Fechar o painel |
+| `←` / `→` | Alterar o horário pelo atalho nativo do Windy, quando disponível |
+| `+` / `-` | Controlar o zoom pelo atalho nativo do Windy |
 
-Os atalhos podem ser interceptados pelo navegador ou sistema operacional.
+Alguns atalhos podem ser interceptados pelo navegador ou pelo sistema operacional.
 
-## Privacidade
+## 🔐 Privacidade e segurança
 
-- O script não inclui bibliotecas de terceiros.
-- Não coleta informações de contas nem envia dados a serviços externos.
-- Preferências são guardadas apenas no `localStorage` do navegador, na chave `windy-enhanced:v6:settings`.
-- O backup de configurações é gerado localmente como JSON.
+- Não coleta informações da conta.
+- Não envia telemetria ou preferências para serviços externos.
+- Armazena as configurações apenas no `localStorage`, usando a chave `windy-enhanced:v6:settings`.
+- Valida arquivos importados e aceita vistas salvas somente nos endereços HTTPS oficiais do Windy.
+- Não solicita permissões de rede no Tampermonkey.
 
-## Compatibilidade e limites
+## 🧭 Compatibilidade e limites
 
-O Windy.com muda seus seletores CSS e componentes internos com frequência. A recuperação visual só funciona quando o cinza resulta de um estilo local — não recria dados meteorológicos nem reconstitui cores que já vêm embutidas na imagem. Os botões opcionais de tempo requerem métodos compatíveis; a API oficial para mapas embutidos **não é uma garantia** de que o site principal exponha os mesmos objetos.
+O Windy.com pode alterar seletores e componentes internos sem aviso. A correção de cores funciona somente quando o efeito resulta de um estilo aplicado localmente; ela não recria dados meteorológicos ou imagens que não foram fornecidos pelo servidor.
 
-Se a versão nova apresentar problema, desative-a e use o backup [`legacy/windy_clean_ui_5_1.user.js`](./legacy/windy_clean_ui_5_1.user.js).
+Os controles opcionais de tempo dependem de uma interface compatível exposta pela página. Quando ela não estiver disponível, use a linha do tempo e os atalhos nativos do Windy.
 
-## Desenvolvimento
+Se uma atualização apresentar problemas, desative a versão atual e use o backup [`legacy/windy_clean_ui_5_1.user.js`](legacy/windy_clean_ui_5_1.user.js).
 
-A versão atual não tem dependências de execução nem etapa de build. Para executar todas as verificações locais:
+## 🛠️ Desenvolvimento
+
+O projeto não possui dependências de execução nem etapa de build. É necessário apenas o [Node.js](https://nodejs.org/) para executar as verificações:
 
 ```bash
+git clone https://github.com/hpuglia/windy-enhanced.git
+cd windy-enhanced
 npm test
 ```
 
-O teste confere a sintaxe, os metadados de instalação e a correspondência da versão com o changelog. Para publicar novas versões, altere `@version` no cabeçalho do userscript e atualize [`CHANGELOG.md`](./CHANGELOG.md).
+O teste verifica:
 
-## Referências técnicas
+- sintaxe do JavaScript;
+- presença dos metadados obrigatórios;
+- URLs de instalação e atualização em HTTPS;
+- correspondência da versão entre o userscript, `package.json` e [`CHANGELOG.md`](CHANGELOG.md);
+- integridade da codificação UTF-8.
 
-- [Documentação Windy Map Forecast API](https://api.windy.com/map-forecast/docs)
-- [Atalhos do Windy, fórum oficial](https://community.windy.com/topic/13/keyboard-shortcuts)
+O mesmo processo é executado automaticamente pelo GitHub Actions em cada alteração relevante.
 
-## Licença
+## 🤝 Contribuições
 
-MIT — consulte [`LICENSE`](./LICENSE).
+Sugestões e relatos são bem-vindos nas [Issues](https://github.com/hpuglia/windy-enhanced/issues). Ao relatar um problema, informe o navegador, o gerenciador de userscripts e, se possível, a área do Windy em que ocorreu.
+
+## 📚 Referências
+
+- [Windy Map Forecast API](https://api.windy.com/map-forecast/docs)
+- [Atalhos do Windy — fórum oficial](https://community.windy.com/topic/13/keyboard-shortcuts)
+- [Documentação do Tampermonkey](https://www.tampermonkey.net/documentation.php)
+
+## 📄 Licença
+
+Distribuído sob a licença [MIT](LICENSE). Criado por **Henrique / Puglia Apps**.

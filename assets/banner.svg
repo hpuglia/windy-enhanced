@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="320" viewBox="0 0 1200 320" role="img" aria-labelledby="title description">
+  <title id="title">Windy Enhanced</title>
+  <desc id="description">Banner azul com linhas meteorológicas e o texto Windy Enhanced.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#071426"/>
+      <stop offset="0.48" stop-color="#12345a"/>
+      <stop offset="1" stop-color="#0b827d"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#63b3ff"/>
+      <stop offset="1" stop-color="#78f2c8"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#020817" flood-opacity="0.45"/>
+    </filter>
+  </defs>
+
+  <rect width="1200" height="320" rx="28" fill="url(#background)"/>
+  <g fill="none" stroke="#bce7ff" stroke-opacity="0.16" stroke-width="2">
+    <path d="M-30 82 C130 10 245 150 405 77 S690 30 846 93 1080 161 1240 73"/>
+    <path d="M-25 132 C105 61 254 194 419 124 S702 75 871 142 1072 206 1235 124"/>
+    <path d="M-40 205 C123 118 246 265 427 188 S718 141 875 208 1078 270 1240 184"/>
+    <path d="M-28 263 C122 181 273 316 437 249 S721 198 886 261 1084 326 1242 244"/>
+  </g>
+  <g fill="none" stroke="url(#accent)" stroke-linecap="round" opacity="0.75">
+    <path d="M100 173 C151 125 204 125 255 173" stroke-width="10"/>
+    <path d="M124 207 C165 170 207 170 232 193" stroke-width="8"/>
+    <path d="M137 137 C177 101 220 103 244 122" stroke-width="8"/>
+  </g>
+  <circle cx="176" cy="166" r="88" fill="#091b32" fill-opacity="0.52" stroke="#8bd8ed" stroke-opacity="0.36" stroke-width="2"/>
+
+  <g filter="url(#shadow)">
+    <text x="315" y="151" fill="#ffffff" font-family="Segoe UI, Inter, Arial, sans-serif" font-size="62" font-weight="750" letter-spacing="-1">Windy Enhanced</text>
+    <text x="319" y="205" fill="#c9e4f5" font-family="Segoe UI, Inter, Arial, sans-serif" font-size="25" font-weight="400">Mais controle, foco e conforto visual no Windy.com</text>
+  </g>
+  <rect x="319" y="232" width="238" height="5" rx="2.5" fill="url(#accent)"/>
+</svg>
