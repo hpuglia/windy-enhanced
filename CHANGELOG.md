@@ -1,5 +1,11 @@
 # Changelog
 
+## [6.4.1] - 2026-11-03
+
+- Ocultado por padrão o atalho `Arquivo`, que abre o histórico temporal e não representa o cache.
+- Adicionada opção independente para reexibir o histórico quando necessário.
+- Mantido o cache nativo do Windy e do navegador, sem downloads automáticos pesados da timeline.
+
 ## [6.4.0] - 2026-11-03
 
 - Ocultada a barra visual de rolagem do painel, preservando rolagem por mouse, toque e teclado.

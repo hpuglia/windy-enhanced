@@ -31,6 +31,7 @@
 | 🧹 **Modo limpo instantâneo** | O botão de vassoura oculta logotipo, barras, laterais e timeline para deixar somente o mapa. |
 | 🪟 **Logotipo superior** | Pode ocultar somente a marca Windy.com, independentemente do modo limpo. |
 | 🏷️ **Branding do mapa** | Oculta por padrão os selos institucionais sobrepostos, com controle independente no painel. |
+| 🗓️ **Arquivo temporal** | Pode esconder o atalho de histórico sem interferir no cache automático do navegador. |
 | 🌘 **Sombras ajustáveis** | Aplica contraste gradual ao redor dos controles, com intensidade regulável no painel. |
 | ➖ **Camadas recolhíveis** | Move o Menu para junto do avatar e adiciona `−`/`+` para ocultar ou revelar os tipos de mapas. |
 | 👑 **Indicadores Premium** | Remove globalmente as coroas sem apagar o texto ou o controle associado. |

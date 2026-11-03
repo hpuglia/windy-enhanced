@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Windy Enhanced - Cores, Interface e Controles
 // @namespace    https://www.windy.com/
-// @version      6.4.0
+// @version      6.4.1
 // @description  Melhora a interface do Windy com opções visuais, visualização limpa, favoritos de visualização e controles opcionais da linha do tempo.
 // @author       Henrique / Puglia Apps
 // @match        https://www.windy.com/*
@@ -22,13 +22,14 @@
 
     // Windy Enhanced 6.4 - interface local. Nenhuma requisição externa,
     // alteração de credenciais ou simulação de assinatura.
-    const VERSION = '6.4.0';
+    const VERSION = '6.4.1';
     const STORAGE_KEY = 'windy-enhanced:v6:settings';
     const ALLOWED_VIEW_ORIGINS = new Set(['https://windy.com', 'https://www.windy.com']);
     const DEFAULTS = Object.freeze({
         restoreColors: true,
         hideLogo: true,
         hideBranding: true,
+        hideArchive: true,
         hidePromos: true,
         shadows: true,
         shadowIntensity: 78,
@@ -64,6 +65,7 @@
             restoreColors: typeof obj.restoreColors === 'boolean' ? obj.restoreColors : DEFAULTS.restoreColors,
             hideLogo: typeof obj.hideLogo === 'boolean' ? obj.hideLogo : DEFAULTS.hideLogo,
             hideBranding: typeof obj.hideBranding === 'boolean' ? obj.hideBranding : DEFAULTS.hideBranding,
+            hideArchive: typeof obj.hideArchive === 'boolean' ? obj.hideArchive : DEFAULTS.hideArchive,
             hidePromos: typeof obj.hidePromos === 'boolean' ? obj.hidePromos : DEFAULTS.hidePromos,
             shadows: typeof obj.shadows === 'boolean' ? obj.shadows : DEFAULTS.shadows,
             shadowIntensity: Number.isFinite(Number(obj.shadowIntensity))
@@ -183,6 +185,10 @@
             display: none !important;
         }
 
+        html.we-hide-archive [data-we-archive-control="1"] {
+            display: none !important;
+        }
+
         /* Sombras graduais preservam o mapa e aumentam o contraste somente
            ao redor dos grupos de interface. */
         html.we-shadows #search {
@@ -295,6 +301,7 @@
             html.classList.toggle('we-restore-colors', settings.restoreColors);
             html.classList.toggle('we-hide-logo', settings.hideLogo);
             html.classList.toggle('we-hide-branding', settings.hideBranding);
+            html.classList.toggle('we-hide-archive', settings.hideArchive);
             html.classList.toggle('we-shadows', settings.shadows);
             html.classList.toggle('we-layers-collapsed', settings.layersCollapsed);
             html.classList.toggle('we-focus', settings.focusMode);
@@ -352,17 +359,34 @@
         }
     }
 
+    function scanForArchive(root) {
+        if (!settings.hideArchive || !root || root.nodeType !== 1) return;
+        const selector = 'a,button,[role="button"],.clickable';
+        const nodes = [];
+        if (root.matches?.(selector)) nodes.push(root);
+        if (root.querySelectorAll) nodes.push(...root.querySelectorAll(selector));
+        for (const el of nodes) {
+            if (el.closest('#we-root') || el.hasAttribute('data-we-archive-control')) continue;
+            const label = (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+            if (/^(?:arquivo|archive)$/i.test(label)) el.setAttribute('data-we-archive-control', '1');
+        }
+    }
+
     let pending = new Set();
     let scanTimer = null;
     function scheduleScan(node) {
-        if (!settings.hidePromos || !node || node.nodeType !== 1) return;
+        if ((!settings.hidePromos && !settings.hideArchive) || !node || node.nodeType !== 1) return;
         pending.add(node);
         if (scanTimer !== null) return;
         scanTimer = window.setTimeout(() => {
             scanTimer = null;
             const batch = [...pending];
             pending.clear();
-            for (const item of batch) if (item.isConnected) scanForPromos(item);
+            for (const item of batch) {
+                if (!item.isConnected) continue;
+                if (settings.hidePromos) scanForPromos(item);
+                if (settings.hideArchive) scanForArchive(item);
+            }
         }, 200);
     }
 
@@ -392,7 +416,7 @@
             settings[name] = checkbox.checked;
             persist();
             applySettings();
-            if (name === 'hidePromos' && settings.hidePromos) scheduleScan(document.body);
+            if ((name === 'hidePromos' || name === 'hideArchive') && settings[name]) scheduleScan(document.body);
             setStatus(`${title}: ${checkbox.checked ? 'ativado' : 'desativado'}.`);
         });
         label.append(copy, checkbox);
@@ -741,6 +765,7 @@
         addSetting(panel, 'restoreColors', 'Cores do mapa', 'Remove filtros visuais locais quando presentes.');
         addSetting(panel, 'hideLogo', 'Ocultar logotipo superior', 'Remove apenas a marca Windy.com do topo da tela.');
         addSetting(panel, 'hideBranding', 'Remover branding', 'Oculta selos institucionais sobrepostos ao mapa.');
+        addSetting(panel, 'hideArchive', 'Ocultar Arquivo', 'Esconde o histórico temporal; o cache normal continua automático.');
         addSetting(panel, 'hidePromos', 'Ocultar chamadas Premium', 'Esconde banners e botões promocionais reconhecidos.');
         addSetting(panel, 'shadows', 'Sombras', 'Cria contraste suave entre o mapa e os grupos de controles.');
         addShadowRange(panel);
@@ -834,7 +859,7 @@
         if (ev.key !== STORAGE_KEY) return;
         settings = load();
         applySettings();
-        if (settings.hidePromos) scheduleScan(document.body);
+        if (settings.hidePromos || settings.hideArchive) scheduleScan(document.body);
         scheduleWindyLayout();
         setStatus('Preferências sincronizadas de outra aba.');
     });
@@ -849,7 +874,7 @@
             for (const record of records) {
                 for (const node of record.addedNodes) {
                     if (node.nodeType === 1) hasAddedElement = true;
-                    if (settings.hidePromos) scheduleScan(node);
+                    if (settings.hidePromos || settings.hideArchive) scheduleScan(node);
                 }
             }
             if (hasAddedElement) scheduleWindyLayout();

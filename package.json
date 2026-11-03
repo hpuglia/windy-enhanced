@@ -1,6 +1,6 @@
 {
   "name": "windy-enhanced",
-  "version": "6.4.0",
+  "version": "6.4.1",
   "private": true,
   "description": "Userscript para personalizar a interface do Windy.com",
   "scripts": {
