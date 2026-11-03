@@ -1047,7 +1047,18 @@
             min=Math.max(limitMin,now-wm.hours*3600000);
         // Do not fabricate a forecast range. If it has been visited, include
         // the observed red portion; otherwise loop over what was displayed.
-        if(max<=min && wm.hours>1) max=Math.min(limitMax,now);
+        // When the user clicks at the far-left edge before navigating across
+        // the whole timeline, there may be only one observed timestamp.
+        // Extend toward the present using the same Windy time controller.
+        // Unavailable data is rejected by the site; no external downloads.
+        if(max<=min){
+            if(min<now-65*60000){
+                max=Math.min(limitMax,now);
+            }else{
+                min=Math.max(limitMin,now-3600000);
+                max=Math.min(limitMax,now+50*60000);
+            }
+        }
         if(max<=min)return [];
         const diffs=seen.slice().sort((a,b)=>a-b).slice(1).map((v,i,a)=>
             v-seen.slice().sort((x,y)=>x-y)[i]).filter(d=>d>=60000&&d<=15*60000);
