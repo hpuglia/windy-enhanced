@@ -1181,7 +1181,7 @@
             nativeReplayTime(store.get(nativeReplayProduct(store) === 'radar'
                 ? 'radarTimestamp' : 'satelliteTimestamp'));
         const oldTime = current !== null && Date.now() - current > 65 * 60000;
-        if (!choice || (nativeReplay.selectedHours === 1 && !oldTime)) return;
+        if (!choice && nativeReplay.selectedHours === 1 && !oldTime) return;
 
         const firstTab = found.get(24).getBoundingClientRect();
         const playCandidates = document.querySelectorAll(
@@ -1275,8 +1275,13 @@
             ?? nativeReplayTime(store.get(product === 'radar' ? 'radarTimestamp' : 'satelliteTimestamp'));
         const older = current !== null && Date.now() - current > 65 * 60000;
         if (!older && nativeReplay.selectedHours === 1) return false;
-        const choice = nativeReplayChoice(product) || (nativeReplay.selectedHours > 1
-            ? { key: 'radsatTimestamp' } : null);
+        const fallbackKey = ['radsatTimestamp', product === 'radar'
+            ? 'radarTimestamp' : 'satelliteTimestamp'].find(key => {
+            try { return nativeReplayTime(store.get(key)) !== null; }
+            catch (_) { return false; }
+        });
+        const choice = nativeReplayChoice(product) || ((nativeReplay.selectedHours > 1 || older) && fallbackKey
+            ? { key: fallbackKey } : null);
         if (!choice) return false; // Play original conserva seu comportamento.
         event.preventDefault();
         event.stopImmediatePropagation();
