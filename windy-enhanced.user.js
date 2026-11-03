@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Windy Enhanced - Cores, Interface e Controles
 // @namespace    https://www.windy.com/
-// @version      6.5.0
+// @version      6.5.1
 // @description  Melhora a interface do Windy com opções visuais, visualização limpa, favoritos de visualização e controles opcionais da linha do tempo.
 // @author       Henrique / Puglia Apps
 // @match        https://www.windy.com/*
@@ -23,7 +23,7 @@
 
     // Windy Enhanced 6.4 - interface local. Nenhuma requisição externa,
     // alteração de credenciais ou simulação de assinatura.
-    const VERSION = '6.5.0';
+    const VERSION = '6.5.1';
     const STORAGE_KEY = 'windy-enhanced:v6:settings';
     const ALLOWED_VIEW_ORIGINS = new Set(['https://windy.com', 'https://www.windy.com']);
     const DEFAULTS = Object.freeze({
@@ -166,7 +166,7 @@
         html.we-hide-promos [data-we-premium-dialog],
         html.we-hide-promos [data-we-premium-backdrop] { display:none !important; }
         html.we-hide-branding [data-we-provider-logo] { display:none !important; }
-        html.we-hide-branding [data-we-mapy-selector-heading] { display:none !important; }
+        /* Preserva Outdoor, Winter sports e Aerial independentemente do branding. */
 
         html.we-restore-colors .premium-calendar #map-container,
         html.we-restore-colors .premium-calendar #map-container #leaflet-map {
@@ -805,17 +805,6 @@
         addSetting(panel, 'shadows', 'Sombras', 'Cria contraste suave entre o mapa e os grupos de controles.');
         addShadowRange(panel);
 
-        section(panel, 'Linha do tempo');
-        const timeButtons = document.createElement('div');
-        timeButtons.className = 'we-buttons';
-        addButton(timeButtons, '← Anterior', () => changeTime(-1));
-        addButton(timeButtons, 'Próximo →', () => changeTime(1));
-        panel.appendChild(timeButtons);
-        const shortcuts = document.createElement('div');
-        shortcuts.className = 'we-detail';
-        shortcuts.textContent = 'No Windy: ←/→ muda o horário; +/- controla o zoom. Enhanced: Alt+Shift+E abre este painel; Alt+Shift+L alterna o modo limpo. Os botões acima exigem API compatível.';
-        panel.appendChild(shortcuts);
-
         section(panel, 'Minha visualização');
         const viewButtons = document.createElement('div');
         viewButtons.className = 'we-buttons';
@@ -1172,19 +1161,7 @@
                 wm.aerial=parent;parent.setAttribute('data-we-aerial','1');
                 parent.removeAttribute('disabled');parent.setAttribute('aria-disabled','false');
             }
-            if(settings.hideBranding&&/^Outdoor maps provided by Mapy\.com$/i.test(wmText(el))&&
-               ![...el.children].some(x=>/^Outdoor maps provided by Mapy\.com$/i.test(wmText(x))))
-                {
-                    let target=el;
-                    for(let parent=el.parentElement,n=0;parent&&n<3;parent=parent.parentElement,n++){
-                        const rect=parent.getBoundingClientRect();
-                        if(rect.width>=180&&rect.width<=500&&rect.height<=75&&
-                            /mapy\.com/i.test(wmText(parent))){
-                            target=parent;break;
-                        }
-                    }
-                    target.setAttribute('data-we-mapy-selector-heading','1');
-                }
+
         }
     }
     function wmScanModal(root){
@@ -1217,6 +1194,7 @@
         const els=[...(root.matches?.(sels)?[root]:[]),...root.querySelectorAll(sels)];
         for(const el of els){
             if(el.closest('#we-root'))continue;
+            if(el.closest('.map-selector,[data-plugin*="map-selector"],[data-we-aerial]'))continue;
             const meta=[el.getAttribute('alt'),el.getAttribute('src'),
                 el.getAttribute('title'),el.getAttribute('aria-label'),
                 el.getAttribute('href'),el.getAttribute('style'),typeof el.className==='string'?el.className:'',
@@ -1227,6 +1205,8 @@
                 r.right<innerWidth*.50||r.top<innerHeight*.25)continue;
             const p=el.closest('a,[class*="logo"],[class*="branding"]');
             const candidate=p&&p.getBoundingClientRect().width<=280?p:el;
+            if(/outdoor|winter sports|aerial|mapy\.com/i.test(wmText(candidate)))continue;
+            if(candidate.querySelectorAll('img,svg').length>4)continue;
             candidate.setAttribute('data-we-provider-logo','1');
         }
     }
