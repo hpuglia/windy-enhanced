@@ -1,0 +1,20 @@
+name: Validate userscript
+on:
+  push:
+    paths:
+      - 'windy-enhanced.user.js'
+      - '.github/workflows/validate.yml'
+  pull_request:
+    paths:
+      - 'windy-enhanced.user.js'
+      - '.github/workflows/validate.yml'
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check JavaScript syntax
+        run: node --check windy-enhanced.user.js
