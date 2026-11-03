@@ -1,5 +1,14 @@
 # Changelog
 
+## [6.1.0] - 2026-11-03
+
+- Adicionados links de instalação, atualização, página inicial e suporte no cabeçalho do userscript.
+- Melhorada a acessibilidade do painel com diálogo identificado, botão de fechar, tecla `Esc` e gerenciamento de foco.
+- Adicionada sincronização de preferências entre abas do Windy.
+- Reforçada a validação de URLs importadas para rejeitar portas alternativas e credenciais embutidas.
+- Adicionada confirmação antes de restaurar todas as preferências.
+- Adicionada validação automatizada de sintaxe, metadados e consistência de versão.
+
 ## [6.0.0] - 2026-11-03
 
 - Adicionado painel de configuração responsivo e persistência de preferências.

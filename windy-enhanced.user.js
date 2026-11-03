@@ -1,12 +1,16 @@
 // ==UserScript==
 // @name         Windy Enhanced - Cores, Interface e Controles
 // @namespace    https://www.windy.com/
-// @version      6.0.0
+// @version      6.1.0
 // @description  Melhora a interface do Windy com opções visuais, visualização limpa, favoritos de visualização e controles opcionais da linha do tempo.
 // @author       Henrique / Puglia Apps
 // @match        https://www.windy.com/*
 // @match        https://windy.com/*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=windy.com
+// @homepageURL  https://github.com/hpuglia/windy-enhanced
+// @supportURL   https://github.com/hpuglia/windy-enhanced/issues
+// @downloadURL  https://raw.githubusercontent.com/hpuglia/windy-enhanced/main/windy-enhanced.user.js
+// @updateURL    https://raw.githubusercontent.com/hpuglia/windy-enhanced/main/windy-enhanced.user.js
 // @grant        GM_addStyle
 // @grant        GM_registerMenuCommand
 // @run-at       document-start
@@ -16,9 +20,11 @@
 (function () {
     'use strict';
 
-    // Windy Enhanced 6.0 — interface local. Nenhuma requisição externa,
+    // Windy Enhanced 6.1 - interface local. Nenhuma requisição externa,
     // alteração de credenciais ou simulação de assinatura.
+    const VERSION = '6.1.0';
     const STORAGE_KEY = 'windy-enhanced:v6:settings';
+    const ALLOWED_VIEW_ORIGINS = new Set(['https://windy.com', 'https://www.windy.com']);
     const DEFAULTS = Object.freeze({
         restoreColors: true,
         hidePromos: true,
@@ -37,7 +43,7 @@
         if (typeof value.url !== 'string' || value.url.length > 2500) return null;
         try {
             const url = new URL(value.url);
-            if (!['windy.com', 'www.windy.com'].includes(url.hostname) || url.protocol !== 'https:') return null;
+            if (!ALLOWED_VIEW_ORIGINS.has(url.origin) || url.username || url.password) return null;
             return {
                 url: url.toString(),
                 savedAt: typeof value.savedAt === 'string' ? value.savedAt.slice(0, 40) : ''
@@ -63,7 +69,7 @@
     }
 
     let settings = load();
-    let panel, launcher, uiRoot, statusText, viewText;
+    let panel, launcher, panelClose, uiRoot, statusText, viewText;
     const toggles = new Map();
 
     function persist() {
@@ -144,6 +150,7 @@
             border-radius: 15px; padding: 15px; box-shadow: 0 13px 35px rgba(0,0,0,.44); }
         #we-panel.we-open { display: block; }
         #we-panel .we-header { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 5px; }
+        #we-panel .we-heading { display: flex; align-items: center; gap: 8px; min-width: 0; }
         #we-panel h2 { font: 700 17px/1.3 system-ui,sans-serif; margin: 0; color: #fff; }
         #we-panel h3 { font: 700 12px/1.3 system-ui,sans-serif; text-transform: uppercase;
             letter-spacing: .07em; color: #a8c0df; margin: 15px 0 8px; }
@@ -161,6 +168,10 @@
             cursor: pointer; min-height: 35px; }
         #we-panel button.we-action:hover, #we-panel button.we-action:focus-visible { background: #35547c; }
         #we-panel button.we-action:disabled { opacity: .55; cursor: not-allowed; }
+        #we-panel .we-close { appearance: none; width: 32px; height: 32px; flex: 0 0 auto;
+            border: 0; border-radius: 8px; background: transparent; color: #dbe7f7;
+            font: 24px/1 system-ui,sans-serif; cursor: pointer; }
+        #we-panel .we-close:hover, #we-panel .we-close:focus-visible { background: #2a405f; color: #fff; }
         #we-panel .we-full { grid-column: 1 / -1; }
         #we-panel .we-status { min-height: 17px; margin-top: 10px; font-size: 11px; color: #c5d6ef; }
         #we-panel .we-detail { font-size: 11px; color: #acbdd2; margin: 5px 0 10px; overflow-wrap: anywhere; }
@@ -347,7 +358,12 @@
         const willOpen = typeof force === 'boolean' ? force : !panel.classList.contains('we-open');
         panel.classList.toggle('we-open', willOpen);
         launcher.setAttribute('aria-expanded', String(willOpen));
-        if (willOpen) setStatus('Preferências aplicadas localmente.');
+        if (willOpen) {
+            setStatus('Preferências aplicadas localmente.');
+            window.setTimeout(() => panelClose?.focus(), 0);
+        } else if (panel.contains(document.activeElement)) {
+            launcher.focus();
+        }
     }
 
     function initUI() {
@@ -361,19 +377,33 @@
         launcher.title = 'Windy Enhanced — configurações';
         launcher.setAttribute('aria-label', 'Abrir configurações do Windy Enhanced');
         launcher.setAttribute('aria-expanded', 'false');
+        launcher.setAttribute('aria-controls', 'we-panel');
         launcher.addEventListener('click', () => togglePanel());
 
         panel = document.createElement('section');
         panel.id = 'we-panel';
-        panel.setAttribute('aria-label', 'Configurações do Windy Enhanced');
+        panel.setAttribute('role', 'dialog');
+        panel.setAttribute('aria-modal', 'false');
+        panel.setAttribute('aria-labelledby', 'we-title');
         const header = document.createElement('div');
         header.className = 'we-header';
+        const heading = document.createElement('div');
+        heading.className = 'we-heading';
         const title = document.createElement('h2');
+        title.id = 'we-title';
         title.textContent = 'Windy Enhanced';
         const version = document.createElement('span');
         version.className = 'we-version';
-        version.textContent = 'v6.0.0';
-        header.append(title, version);
+        version.textContent = `v${VERSION}`;
+        heading.append(title, version);
+        panelClose = document.createElement('button');
+        panelClose.type = 'button';
+        panelClose.className = 'we-close';
+        panelClose.textContent = '×';
+        panelClose.title = 'Fechar painel';
+        panelClose.setAttribute('aria-label', 'Fechar configurações');
+        panelClose.addEventListener('click', () => togglePanel(false));
+        header.append(heading, panelClose);
         panel.appendChild(header);
         const intro = document.createElement('p');
         intro.textContent = 'Personalize o mapa sem alterar sua conta ou os dados meteorológicos.';
@@ -419,6 +449,7 @@
             fileInput.value = '';
         });
         addButton(backupButtons, 'Restaurar padrões', () => {
+            if (!window.confirm('Restaurar todas as preferências do Windy Enhanced?')) return;
             settings = sanitize({});
             persist();
             applySettings();
@@ -441,6 +472,11 @@
 
     // Alt + Shift + E abre o painel; Alt + Shift + L alterna modo limpo.
     document.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Escape' && panel?.classList.contains('we-open')) {
+            ev.preventDefault();
+            togglePanel(false);
+            return;
+        }
         if (!ev.altKey || !ev.shiftKey || ev.ctrlKey || ev.metaKey) return;
         const key = ev.key.toLowerCase();
         if (key === 'e') {
@@ -458,6 +494,15 @@
     if (typeof GM_registerMenuCommand === 'function') {
         GM_registerMenuCommand('Windy Enhanced — configurações', () => togglePanel(true));
     }
+
+    // Mantém preferências coerentes quando há mais de uma aba do Windy aberta.
+    window.addEventListener('storage', ev => {
+        if (ev.key !== STORAGE_KEY) return;
+        settings = load();
+        applySettings();
+        if (settings.hidePromos) scheduleScan(document.body);
+        setStatus('Preferências sincronizadas de outra aba.');
+    });
 
     function start() {
         applySettings();

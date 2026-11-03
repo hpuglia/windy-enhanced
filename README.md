@@ -7,12 +7,14 @@ Userscript independente para personalizar a interface do [Windy.com](https://www
 ## Instalação
 
 1. Instale um gerenciador de userscripts compatível (por exemplo, Tampermonkey).
-2. Abra o arquivo [`windy-enhanced.user.js`](./windy-enhanced.user.js) e copie o conteúdo para um novo script no gerenciador (ou abra a opção **Raw** no GitHub após publicar o repositório).
+2. [Clique aqui para instalar o Windy Enhanced](https://raw.githubusercontent.com/hpuglia/windy-enhanced/main/windy-enhanced.user.js) e confirme a instalação no Tampermonkey.
 3. Salve e visite `https://www.windy.com/`.
 4. Desative a versão 5.1 anterior para não sobrepor regras de CSS.
 5. Abra o painel pelo botão **⚙** no canto superior direito.
 
-## Recursos da versão 6.0.0
+As atualizações são detectadas pelo gerenciador de userscripts por meio dos metadados `@updateURL` e `@downloadURL`.
+
+## Recursos da versão 6.1.0
 
 | Recurso | Descrição |
 | --- | --- |
@@ -24,6 +26,9 @@ Userscript independente para personalizar a interface do [Windy.com](https://www
 | Importação/exportação | Preferências em arquivo JSON. |
 | Controles de horário | Botões anterior/próximo somente quando o site expõe uma interface de tempo compatível; se não, use as setas do Windy. |
 | Observador otimizado | Examina apenas elementos novos do DOM, com agrupamento de eventos. |
+| Sincronização entre abas | Reaplica preferências alteradas em outra aba aberta do Windy. |
+
+O painel pode ser fechado pelo botão **×** ou pela tecla `Esc`, possui identificação adequada para leitores de tela e restaura o foco ao botão de abertura.
 
 ### Atalhos
 
@@ -51,13 +56,13 @@ Se a versão nova apresentar problema, desative-a e use o backup [`legacy/windy_
 
 ## Desenvolvimento
 
-A versão atual não tem dependências nem build. Para conferir a sintaxe:
+A versão atual não tem dependências de execução nem etapa de build. Para executar todas as verificações locais:
 
 ```bash
-node --check windy-enhanced.user.js
+npm test
 ```
 
-Para publicar novas versões, altere `@version` no cabeçalho do userscript e atualize [`CHANGELOG.md`](./CHANGELOG.md).
+O teste confere a sintaxe, os metadados de instalação e a correspondência da versão com o changelog. Para publicar novas versões, altere `@version` no cabeçalho do userscript e atualize [`CHANGELOG.md`](./CHANGELOG.md).
 
 ## Referências técnicas
 

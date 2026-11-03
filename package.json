@@ -1,0 +1,10 @@
+{
+  "name": "windy-enhanced",
+  "version": "6.1.0",
+  "private": true,
+  "description": "Userscript para personalizar a interface do Windy.com",
+  "scripts": {
+    "test": "node --check windy-enhanced.user.js && node scripts/validate-userscript.mjs"
+  },
+  "license": "MIT"
+}
