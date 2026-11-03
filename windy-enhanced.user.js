@@ -893,6 +893,7 @@
     // Adaptador dos controles originais do Windy. Não constrói interface.
     const wm={store:null,product:null,hours:1,timer:null,playing:false,play:null,
         activeKey:null,sampled:{radar:new Map(),satellite:new Map()},
+        segments:{radar:new Map(),satellite:new Map()},
         last:Object.create(null),lastChanged:null,hourEls:new Map(),aerial:null,
         ignoreClickUntil:0,reason:'',scanTimer:null,scanPending:new Set()};
     const WM_KEYS=['radarTimestamp','satelliteTimestamp','radsatTimestamp'];
@@ -916,6 +917,55 @@
             return /radar/.test(t)?'radar':/satellite/.test(t)?'satellite':null;
         }catch(_){return null;}
     }
+
+    // Store the actual radar+/nowcast segment seen when the user moves
+    // between the white (observations) and red (extrapolation) portions.
+    // Only replay values already observed in the current browser session.
+    function wmSegment(store){
+        try{
+            const v=store.get('radarPlusSegmentRange');
+            if(v==null||typeof v==='number'||typeof v==='string')return v;
+            if(Array.isArray(v)&&v.length===2&&v.every(n=>typeof n==='number'&&Number.isFinite(n)))
+                return [...v];
+            if(typeof v==='object'){
+                const keys=Object.keys(v);
+                if(keys.length>6)return undefined;
+                const copy={};
+                for(const k of keys){
+                    if(!['number','string','boolean'].includes(typeof v[k]))return undefined;
+                    copy[k]=v[k];
+                }
+                return copy;
+            }
+        }catch(_){}
+        return undefined;
+    }
+    function wmSequence(product,minimum){
+        const all=[];
+        const keys=product==='radar'
+            ? ['radarTimestamp','radsatTimestamp','satelliteTimestamp']
+            : ['satelliteTimestamp','radsatTimestamp','radarTimestamp'];
+        for(const key of keys){
+            const snapshots=wm.segments[product].get(key);
+            for(const time of wm.sampled[product].get(key)||[]){
+                if(time<minimum)continue;
+                all.push({time,key,segment:snapshots?.get(time)});
+            }
+        }
+        return all.sort((a,b)=>a.time-b.time || keys.indexOf(a.key)-keys.indexOf(b.key));
+    }
+    function wmSetFrame(store,frame){
+        if(frame.segment!==undefined){
+            const current=wmSegment(store);
+            if(JSON.stringify(current)!==JSON.stringify(frame.segment)){
+                try{store.set('radarPlusSegmentRange',frame.segment);}catch(_){}
+            }
+        }
+        store.set(frame.key,frame.time);
+        const actual=wmTime(store.get(frame.key));
+        return actual!==null&&Math.abs(actual-frame.time)<=60000;
+    }
+
     function wmObserve(){
         const store=wmStore(),product=wmProduct(store);
         if(!product)return;
@@ -932,6 +982,13 @@
                     frames.add(t);
                     if(frames.size>650)frames.delete(frames.values().next().value);
                     seen.set(key,frames);
+                    const segment=wmSegment(store);
+                    if(segment!==undefined){
+                        const snapshots=wm.segments[product].get(key)||new Map();
+                        snapshots.set(t,segment);
+                        for(const old of snapshots.keys())if(!frames.has(old))snapshots.delete(old);
+                        wm.segments[product].set(key,snapshots);
+                    }
                 }
             }catch(_){}
         }
@@ -972,32 +1029,58 @@
             wmStop('Replay pausado: controle não disponível.');return;
         }
         wmObserve();
-        const key=wm.activeKey,now=wmTime(store.get(key));
+        const key=wm.activeKey;
+        let now;
+        try{now=wmTime(store.get(key));}catch(_){now=null;}
         if(now===null){wmStop('Horário atual não disponível.');return;}
+
         const cutoff=Date.now()-wm.hours*3600000-20*60000;
-        const frames=[...(wm.sampled[product].get(key)||[])].filter(t=>t>=cutoff).sort((a,b)=>a-b);
-        let next=frames.find(t=>t>now);
-        if(next===undefined&&frames.length>1)next=frames[0];
-        if(next===undefined){
+        const known=wmSequence(product,cutoff);
+        // The white radar and red extrapolated forecast are separate native
+        // loops. Crossing works when the corresponding red-segment state has
+        // already been observed, otherwise replay restarts at the first frame.
+        let frame=known.find(v=>v.time>now);
+        if(!frame && known.length>1)frame=known[0];
+
+        if(!frame){
             wmStepSynthetic();
             wm.timer=setTimeout(()=>{
-                const after=wmTime(store.get(key));
-                if(after===null||after===now){
-                    wmStop('As setas simuladas não são aceitas pelo Windy; navegue pelas setas reais para registrar a sequência.');
+                let next;
+                try{next=wmTime(store.get(key));}catch(_){next=null;}
+                if(next===null||next===now){
+                    wmStop('Quadros adicionais indisponíveis. Navegue pelo trecho vermelho para registrá-lo.');
                     return;
                 }
-                wmObserve();wm.timer=setTimeout(wmTick,wmSpeed(store));
+                wmObserve();
+                wm.timer=setTimeout(wmTick,wmSpeed(store));
             },125);
             return;
         }
-        try{store.set(key,next);}
-        catch(_){wmStop('Windy recusou o quadro.');return;}
-        wm.timer=setTimeout(()=>{
-            const after=wmTime(store.get(key));
-            if(after===null||Math.abs(after-next)>60000){
-                wmStop('Windy não aceitou o avanço do quadro.');return;
+
+        let ok=false;
+        try{ok=wmSetFrame(store,frame);}catch(_){}
+        if(!ok){
+            // If the forecast segment is unavailable, restart the observed
+            // loop rather than leaving playback stranded at the red divider.
+            const first=known.find(v=>v.time<now);
+            if(first && (first.time!==frame.time||first.key!==frame.key)){
+                try{ok=wmSetFrame(store,first);frame=first;}catch(_){}
             }
-            wmObserve();wm.timer=setTimeout(wmTick,wmSpeed(store));
+        }
+        if(!ok){
+            wmStop('O Windy não aceitou a mudança entre histórico e previsão.');
+            return;
+        }
+        wm.activeKey=frame.key;
+        wm.timer=setTimeout(()=>{
+            let after;
+            try{after=wmTime(store.get(frame.key));}catch(_){after=null;}
+            if(after===null||Math.abs(after-frame.time)>60000){
+                wmStop('Quadro não aceito pelo controle temporal do Windy.');
+                return;
+            }
+            wmObserve();
+            wm.timer=setTimeout(wmTick,wmSpeed(store));
         },85);
     }
     function wmPlayStart(event,button){
