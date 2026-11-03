@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Windy Enhanced - Cores, Interface e Controles
 // @namespace    https://www.windy.com/
-// @version      6.4.4
+// @version      6.5.0
 // @description  Melhora a interface do Windy com opções visuais, visualização limpa, favoritos de visualização e controles opcionais da linha do tempo.
 // @author       Henrique / Puglia Apps
 // @match        https://www.windy.com/*
@@ -23,7 +23,7 @@
 
     // Windy Enhanced 6.4 - interface local. Nenhuma requisição externa,
     // alteração de credenciais ou simulação de assinatura.
-    const VERSION = '6.4.4';
+    const VERSION = '6.5.0';
     const STORAGE_KEY = 'windy-enhanced:v6:settings';
     const ALLOWED_VIEW_ORIGINS = new Set(['https://windy.com', 'https://www.windy.com']);
     const DEFAULTS = Object.freeze({
@@ -147,6 +147,26 @@
             pointer-events: auto !important;
             cursor: pointer !important;
         }
+
+
+        /* Mantém sempre os controles originais do Windy. */
+        [data-we-hour],[data-we-native-play],[data-we-aerial] {
+            opacity: 1 !important; pointer-events: auto !important;
+            visibility: visible !important; filter: none !important;
+            cursor: pointer !important;
+        }
+        [data-we-hour].we-selected-hour { color:#fff !important;
+            border-radius:15px !important; background:#aa6b56 !important; }
+        [data-we-native-play].we-running { position:relative !important; }
+        [data-we-native-play].we-running::after { content:"❚❚";
+            position:absolute; inset:0; display:flex; justify-content:center;
+            align-items:center; background:#fff; color:#bb202b;
+            border-radius:inherit; font:700 19px system-ui;
+            pointer-events:none; }
+        html.we-hide-promos [data-we-premium-dialog],
+        html.we-hide-promos [data-we-premium-backdrop] { display:none !important; }
+        html.we-hide-branding [data-we-provider-logo] { display:none !important; }
+        html.we-hide-branding [data-we-mapy-selector-heading] { display:none !important; }
 
         html.we-restore-colors .premium-calendar #map-container,
         html.we-restore-colors .premium-calendar #map-container #leaflet-map {
@@ -880,604 +900,354 @@
     });
 
 
-    // Integração discreta com o Play original do Radar/Satélite.
-    // Não cria controles: reaproveita o botão do Windy quando a timeline já
-    // exibiu horários anteriores a 1h nesta aba e o store permite alterá-los.
-    // Dados Premium não são liberados; se a API não estiver exposta, o Play
-    // original continua funcionando sem nenhuma alteração.
-    const nativeReplay = {
-        observations: {
-            radsatTimestamp: new Set(),
-            radarTimestamp: new Set(),
-            satelliteTimestamp: new Set()
-        },
-        previous: Object.create(null),
-        timer: null,
-        button: null,
-        key: null,
-        product: null,
-        store: null,
-        frameMs: 430,
-        selectedHours: 1,
-        suppressClickUntil: 0
-    };
 
-    function nativeReplayStore() {
-        try {
-            const page = typeof unsafeWindow === 'undefined' ? window : unsafeWindow;
-            return [page.W?.store, page.windyAPI?.store, window.W?.store, window.windyAPI?.store]
-                .find(s => s && typeof s.get === 'function' && typeof s.set === 'function') || null;
-        } catch (_) { return null; }
+    // Adaptador dos controles originais do Windy. Não constrói interface.
+    const wm={store:null,product:null,hours:1,timer:null,playing:false,play:null,
+        activeKey:null,sampled:{radar:new Map(),satellite:new Map()},
+        last:Object.create(null),lastChanged:null,hourEls:new Map(),aerial:null,
+        ignoreClickUntil:0,reason:'',scanTimer:null,scanPending:new Set()};
+    const WM_KEYS=['radarTimestamp','satelliteTimestamp','radsatTimestamp'];
+    const WM_HOUR=/^(?:(?:há|ago)\s*)?(24|6|1)\s*h$/i;
+    const WM_AERIAL=/^(?:aerial|aéreo|aérea)$/i;
+    const wmText=el=>(el?.textContent||'').replace(/\s+/g,' ').trim();
+    const wmTime=n=>{n=Number(n);return Number.isFinite(n)&&n>946684800000&&
+        n<Date.now()+86400000?n:null;};
+
+    function wmStore(){
+        try{
+            const page=typeof unsafeWindow!=='undefined'?unsafeWindow:window;
+            return [page.W?.store,page.windyAPI?.store,window.W?.store,window.windyAPI?.store]
+                .find(v=>v&&typeof v.get==='function'&&typeof v.set==='function')||null;
+        }catch(_){return null;}
     }
-
-    function nativeReplayProduct(store) {
-        try {
-            const product = String(store.get('product') || '').toLowerCase();
-            const overlay = String(store.get('overlay') || '').toLowerCase();
-            if (product.includes('radar') || overlay.includes('radar')) return 'radar';
-            if (product.includes('satellite') || overlay.includes('satellite')) return 'satellite';
-        } catch (_) { /* O Windy pode não publicar este estado. */ }
+    function wmProduct(store){
+        if(!store)return null;
+        try{
+            const t=[store.get('product'),store.get('overlay')].map(x=>String(x||'').toLowerCase()).join(' ');
+            return /radar/.test(t)?'radar':/satellite/.test(t)?'satellite':null;
+        }catch(_){return null;}
+    }
+    function wmObserve(){
+        const store=wmStore(),product=wmProduct(store);
+        if(!product)return;
+        wm.store=store;wm.product=product;
+        for(const key of WM_KEYS){
+            try{
+                const t=wmTime(store.get(key));
+                if(t===null)continue;
+                const id=product+':'+key,seen=wm.sampled[product];
+                if(wm.last[id]!==t){
+                    if(wm.last[id]!==undefined)wm.lastChanged=key;
+                    wm.last[id]=t;
+                    const frames=seen.get(key)||new Set();
+                    frames.add(t);
+                    if(frames.size>650)frames.delete(frames.values().next().value);
+                    seen.set(key,frames);
+                }
+            }catch(_){}
+        }
+    }
+    function wmKey(store,product){
+        const preference=product==='radar'
+            ?['radarTimestamp','radsatTimestamp','satelliteTimestamp']
+            :['satelliteTimestamp','radsatTimestamp','radarTimestamp'];
+        const seen=wm.sampled[product];
+        if(wm.lastChanged&&preference.includes(wm.lastChanged)&&
+            (seen.get(wm.lastChanged)?.size||0)>=2)return wm.lastChanged;
+        const ordered=preference.map(k=>[k,seen.get(k)?.size||0]).sort((x,y)=>y[1]-x[1]);
+        for(const [key]of ordered)try{if(wmTime(store.get(key))!==null)return key;}catch(_){}
         return null;
     }
-
-    function nativeReplayTime(value) {
-        const time = Number(value);
-        return Number.isFinite(time) && time > 946684800000 &&
-            time < Date.now() + 86400000 ? time : null;
+    function wmSpeed(store){
+        let speed;try{speed=store.get('animationSpeed');}catch(_){}
+        if(typeof speed==='number'&&speed>0&&Number.isFinite(speed))
+            return Math.max(90,Math.min(1100,Math.round(350/speed)));
+        speed=String(speed||'normal').toLowerCase();
+        return /slow|turtle|lento/.test(speed)?750:/fast|goat|rápid|2x|4x/.test(speed)?150:350;
     }
-
-    function nativeReplayObserve() {
-        const store = nativeReplayStore();
-        if (!store || !nativeReplayProduct(store)) return;
-        for (const key of Object.keys(nativeReplay.observations)) {
-            try {
-                const time = nativeReplayTime(store.get(key));
-                if (time === null || nativeReplay.previous[key] === time) continue;
-                nativeReplay.previous[key] = time;
-                const values = nativeReplay.observations[key];
-                values.add(time);
-                if (values.size > 500) values.delete(values.values().next().value);
-            } catch (_) { /* Propriedade não exposta. */ }
+    function wmStop(message){
+        wm.playing=false;if(wm.timer!==null)clearTimeout(wm.timer);wm.timer=null;
+        wm.play?.classList.remove('we-running');
+        wm.activeKey=null;
+        if(message){wm.reason=message;setStatus(message);}
+    }
+    function wmStepSynthetic(){
+        const init={key:'ArrowRight',code:'ArrowRight',bubbles:true,cancelable:true};
+        document.dispatchEvent(new KeyboardEvent('keydown',init));
+        document.dispatchEvent(new KeyboardEvent('keyup',init));
+    }
+    function wmTick(){
+        if(!wm.playing)return;
+        const store=wmStore(),product=wmProduct(store);
+        if(!store||!product||product!==wm.product||document.hidden||!wm.play?.isConnected){
+            wmStop('Replay pausado: controle não disponível.');return;
         }
-    }
-
-    function nativeReplayFrames(key) {
-        return [...nativeReplay.observations[key]].sort((a, b) => a - b);
-    }
-
-    function nativeReplayChoice(product) {
-        const keys = product === 'radar'
-            ? ['radsatTimestamp', 'radarTimestamp']
-            : ['radsatTimestamp', 'satelliteTimestamp'];
-        for (const key of keys) {
-            const frames = nativeReplayFrames(key);
-            // Não substitui o Play original para reproduzir apenas a última hora.
-            if (frames.length >= 2 && (nativeReplay.selectedHours > 1 || frames[frames.length - 1] - frames[0] > 65 * 60000)) {
-                return { key, frames };
-            }
-        }
-        return null;
-    }
-
-    function nativeReplayStop() {
-        if (nativeReplay.timer !== null) clearTimeout(nativeReplay.timer);
-        nativeReplay.timer = null;
-        nativeReplay.button?.removeAttribute('data-we-replaying');
-        nativeReplay.button = null;
-        nativeReplay.key = null;
-        nativeReplay.product = null;
-        nativeReplay.store = null;
-    }
-
-    function nativeReplayFrameDelay(store) {
-        try {
-            const setting = store.get('animationSpeed');
-            if (typeof setting === 'number' && Number.isFinite(setting) && setting > 0) {
-                return Math.max(70, Math.min(1500, Math.round(430 / setting)));
-            }
-            const speed = String(setting || '').toLowerCase();
-            if (/very.?fast|ultra|fastest|4x/.test(speed)) return 115;
-            if (/fast|2x/.test(speed)) return 220;
-            if (/slow|0\.5x/.test(speed)) return 850;
-        } catch (_) {}
-        return nativeReplay.frameMs;
-    }
-
-    function nativeReplayKeyboardAdvance() {
-        // Se a página aceita eventos sintéticos, usa o mesmo atalho de navegação
-        // que o usuário pressiona manualmente. O navegador não permite criar
-        // eventos com isTrusted=true, portanto o Windy pode ignorá-los.
-        document.dispatchEvent(new KeyboardEvent('keydown', {
-            key: 'ArrowRight', code: 'ArrowRight', bubbles: true,
-            cancelable: true, keyCode: 39, which: 39
-        }));
-        document.dispatchEvent(new KeyboardEvent('keyup', {
-            key: 'ArrowRight', code: 'ArrowRight', bubbles: true,
-            cancelable: true, keyCode: 39, which: 39
-        }));
-    }
-
-    function nativeReplayTick() {
-        if (nativeReplay.timer === null) return;
-        const { key, product, store } = nativeReplay;
-        if (!document.hasFocus() || document.hidden || !nativeReplay.button?.isConnected ||
-            nativeReplayStore() !== store || nativeReplayProduct(store) !== product) {
-            nativeReplayStop();
-            return;
-        }
-
-        nativeReplayObserve();
-        const frames = nativeReplayFrames(key);
-        try {
-            const now = nativeReplayTime(store.get(key));
-            if (now === null) { nativeReplayStop(); return; }
-            const lower = Date.now() - nativeReplay.selectedHours * 3600000;
-            const eligible = nativeReplay.selectedHours > 1
-                ? frames.filter(t => t >= lower) : frames;
-            if (eligible.length >= 2) {
-                const target = eligible.find(t => t > now) ?? eligible[0];
-                store.set(key, target);
-                const actual = nativeReplayTime(store.get(key));
-                if (actual === null || Math.abs(actual - target) > 60000) {
-                    nativeReplayStop();
+        wmObserve();
+        const key=wm.activeKey,now=wmTime(store.get(key));
+        if(now===null){wmStop('Horário atual não disponível.');return;}
+        const cutoff=Date.now()-wm.hours*3600000-20*60000;
+        const frames=[...(wm.sampled[product].get(key)||[])].filter(t=>t>=cutoff).sort((a,b)=>a-b);
+        let next=frames.find(t=>t>now);
+        if(next===undefined&&frames.length>1)next=frames[0];
+        if(next===undefined){
+            wmStepSynthetic();
+            wm.timer=setTimeout(()=>{
+                const after=wmTime(store.get(key));
+                if(after===null||after===now){
+                    wmStop('As setas simuladas não são aceitas pelo Windy; navegue pelas setas reais para registrar a sequência.');
                     return;
                 }
-            } else {
-                // Primeiro tenta exatamente a navegação das setas, já que ela
-                // pode funcionar mesmo quando a store não lista os quadros.
-                nativeReplayKeyboardAdvance();
-                const after = nativeReplayTime(store.get(key));
-                if (after !== null && after !== now) {
-                    nativeReplayObserve();
-                } else {
-                    nativeReplayStop();
-                    setStatus('O Windy não aceitou o avanço por teclado simulado. Os dados precisam estar acessíveis pelo controlador de tempo.');
-                    return;
-                }
-            }
-        } catch (_) { nativeReplayStop(); return; }
-        nativeReplay.timer = setTimeout(nativeReplayTick, nativeReplayFrameDelay(store));
-    }
-
-    // O botão circular de Play é do Windy. A detecção exige rótulo/classe de
-    // reprodução e contexto da timeline, evitando capturar botões de outras telas.
-    function nativeReplayButtonFromClick(event) {
-        for (const node of event.composedPath()) {
-            if (!(node instanceof Element) || node.closest('#we-root')) continue;
-            if (!node.matches('button, [role="button"], .clickable, [data-ref]')) continue;
-            const attrs = [
-                node.id, typeof node.className === 'string' ? node.className : '',
-                node.getAttribute('data-ref'), node.getAttribute('aria-label'),
-                node.getAttribute('title')
-            ].filter(Boolean).join(' ');
-            if (!/(?:play|pause|replay|reproduzir|pausar|animat)/i.test(attrs) ||
-                /(?:display|forecast|previsão)/i.test(attrs)) continue;
-
-            let context = node.parentElement;
-            let onTimeline = false;
-            for (let depth = 0; context && depth < 6; depth++, context = context.parentElement) {
-                if (context.matches('#bottom-wrapper, [data-plugin*="bottom-controls"], ' +
-                    '[data-plugin*="radar"], .radar-plus, .radarPlus, .timeline, .timeline-bar')) {
-                    onTimeline = true;
-                    break;
-                }
-                const t = (context.textContent || '').replace(/\s+/g, ' ');
-                if (t.includes('1h') && t.includes('6h') && (t.includes('24h') || t.includes('12h'))) {
-                    onTimeline = true;
-                    break;
-                }
-            }
-            if (onTimeline) return node;
-        }
-        return null;
-    }
-
-
-    // NUNCA cria outro player. Reutiliza os itens 1h/6h/24h e Play do Windy.
-    // A alteração de período usa somente o estado que o Windy expõe na página.
-    // Se o servidor não entregar quadros, a interface não consegue fabricá-los.
-    function nativeReplayRangeForHours(value, hours) {
-        const endNow = Date.now();
-        const distance = hours * 3600000;
-        if (typeof value === 'number' && Number.isFinite(value)) {
-            if (value > 1000000 && value < 100000000) return distance;
-            if (value >= 1 && value <= 48) return hours;
-        }
-        if (typeof value === 'string' && /^(1|6|24)h?$/i.test(value)) {
-            return value.endsWith('h') ? hours + 'h' : String(hours);
-        }
-        if (Array.isArray(value) && value.length === 2 &&
-            Number.isFinite(Number(value[0])) && Number.isFinite(Number(value[1]))) {
-            const last = Number(value[1]);
-            if (nativeReplayTime(last) !== null) return [last - distance, last];
-        }
-        if (value && typeof value === 'object' && !Array.isArray(value)) {
-            for (const [startKey, endKey] of [
-                ['start', 'end'], ['from', 'to'], ['min', 'max'],
-                ['startTime', 'endTime'], ['startTs', 'endTs']
-            ]) {
-                if (!Object.hasOwn(value, startKey) || !Object.hasOwn(value, endKey)) continue;
-                const last = Number(value[endKey]);
-                if (nativeReplayTime(last) !== null) {
-                    return { ...value, [startKey]: last - distance };
-                }
-            }
-        }
-        return null;
-    }
-
-    function nativeReplayUpdateRange(hours) {
-        const store = nativeReplayStore();
-        if (!store || !nativeReplayProduct(store)) return false;
-        try {
-            const current = store.get('radarPlusAnimationRange');
-            const target = nativeReplayRangeForHours(current, hours);
-            if (target === null) return false;
-            store.set('radarPlusAnimationRange', target);
-            return true;
-        } catch (_) { return false; }
-    }
-
-    function nativeReplayDurationCandidates() {
-        const matches = new Map();
-        // Limita-se aos controles situados junto à barra de Radar/Satélite.
-        const selectors = [
-            '#bottom-wrapper',
-            '[data-plugin="bottom-controls-desktop"]',
-            '[data-plugin="bottom-controls-mobile"]',
-            '[data-plugin*="radar-plus"]',
-            '[data-plugin*="radarPlus"]'
-        ];
-        const panels = [...new Set(selectors.flatMap(q => [...document.querySelectorAll(q)]))];
-        for (const panel of panels) {
-            const nodes = panel.querySelectorAll('button, [role="button"], label, a, span, div');
-            for (const node of nodes) {
-                if (node.closest('#we-root')) continue;
-                const text = (node.textContent || '').replace(/\s+/g, ' ').trim();
-                const found = /^(?:(?:há|ago)\s*)?(1|6|24)\s*h$/i.exec(text);
-                if (!found) continue;
-                if ([...node.children].some(child =>
-                    /^(?:(?:há|ago)\s*)?(1|6|24)\s*h$/i.test((child.textContent || '').trim()))) continue;
-                const rect = node.getBoundingClientRect();
-                if (rect.width < 14 || rect.width > 120 || rect.height < 10 ||
-                    rect.height > 85 || rect.bottom < innerHeight - 265) continue;
-                const hours = Number(found[1]);
-                if (!matches.has(hours)) matches.set(hours, node);
-            }
-        }
-        return matches.has(1) && matches.has(6) && matches.has(24) ? matches : new Map();
-    }
-
-    let nativeReplayDurationElements = new Map();
-    function nativeReplayRefreshOriginalControls() {
-        const store = nativeReplayStore();
-        if (!store || !nativeReplayProduct(store)) return;
-        const found = nativeReplayDurationCandidates();
-        if (found.size !== 3) return;
-        nativeReplayDurationElements = found;
-        for (const [hours, element] of found) {
-            element.setAttribute('data-we-radsat-hours', String(hours));
-            if (hours !== 1) {
-                element.removeAttribute('disabled');
-                element.setAttribute('aria-disabled', 'false');
-            }
-            element.toggleAttribute('data-we-radsat-selected', nativeReplay.selectedHours === hours);
-            element.toggleAttribute('data-we-radsat-deselected', hours === 1 && nativeReplay.selectedHours !== 1);
-            const parent = element.closest('button, [role="button"], .clickable');
-            if (parent && parent !== element && parent.getBoundingClientRect().width <= 120) {
-                parent.setAttribute('data-we-radsat-hours', String(hours));
-                if (hours !== 1) {
-                    parent.removeAttribute('disabled');
-                    parent.setAttribute('aria-disabled', 'false');
-                }
-            }
-        }
-
-        // O Play desabilitado pode estar fora do mesmo container de 1h/6h/24h.
-        // Reabilita APENAS o botão circular da timeline se há quadros conhecidos
-        // para replay. Não toca nos botões de outros painéis ou assinaturas.
-        const choice = nativeReplayChoice(nativeReplayProduct(store));
-        const current = nativeReplayTime(store.get('radsatTimestamp')) ??
-            nativeReplayTime(store.get(nativeReplayProduct(store) === 'radar'
-                ? 'radarTimestamp' : 'satelliteTimestamp'));
-        const oldTime = current !== null && Date.now() - current > 65 * 60000;
-        if (!choice && nativeReplay.selectedHours === 1 && !oldTime) return;
-
-        const firstTab = found.get(24).getBoundingClientRect();
-        const playCandidates = document.querySelectorAll(
-            'button, [role="button"], .clickable, [data-ref], [class*="play-button"]'
-        );
-        for (const node of playCandidates) {
-            if (node.closest('#we-root')) continue;
-            const rect = node.getBoundingClientRect();
-            if (!rect.width || !rect.height || rect.width > 85 || rect.height > 85 ||
-                rect.width < 24 || rect.height < 24 || rect.bottom < innerHeight - 265 ||
-                rect.right > firstTab.left + 30 || Math.abs(rect.top - firstTab.top) > 55) continue;
-            const label = [
-                node.id, typeof node.className === 'string' ? node.className : '',
-                node.getAttribute('aria-label'), node.getAttribute('data-ref'), node.getAttribute('title')
-            ].filter(Boolean).join(' ');
-            if (!/(play|pause|reproduzir|pausar|animat)/i.test(label)) continue;
-            node.setAttribute('data-we-radsat-play', '1');
-            node.removeAttribute('disabled');
-            node.setAttribute('aria-disabled', 'false');
-            break;
-        }
-    }
-
-    function nativeReplayDurationAt(event) {
-        if (!event.isTrusted || event.button !== 0) return null;
-        for (const [hours, element] of nativeReplayDurationElements) {
-            if (!element.isConnected) continue;
-            const r = element.getBoundingClientRect();
-            if (event.clientX >= r.left && event.clientX <= r.right &&
-                event.clientY >= r.top && event.clientY <= r.bottom) {
-                return hours;
-            }
-        }
-        return null;
-    }
-
-    function nativeReplaySelectHours(event, hours) {
-        if (hours === 1) {
-            nativeReplay.selectedHours = 1;
-            nativeReplayStop();
-            nativeReplayRefreshOriginalControls();
+                wmObserve();wm.timer=setTimeout(wmTick,wmSpeed(store));
+            },125);
             return;
         }
-        // Intercepta a seleção Premium desativada, sem criar nenhuma UI.
-        event.preventDefault();
-        event.stopImmediatePropagation();
-        nativeReplay.suppressClickUntil = Date.now() + 650;
-        nativeReplay.selectedHours = hours;
-        nativeReplayStop();
-        nativeReplayUpdateRange(hours);
-        nativeReplayRefreshOriginalControls();
+        try{store.set(key,next);}
+        catch(_){wmStop('Windy recusou o quadro.');return;}
+        wm.timer=setTimeout(()=>{
+            const after=wmTime(store.get(key));
+            if(after===null||Math.abs(after-next)>60000){
+                wmStop('Windy não aceitou o avanço do quadro.');return;
+            }
+            wmObserve();wm.timer=setTimeout(wmTick,wmSpeed(store));
+        },85);
     }
-
-    function nativeReplayFindPlayAt(event) {
-        if (!event.isTrusted || event.button !== 0) return null;
-        const nodes = document.querySelectorAll(
-            '#bottom-wrapper button, #bottom-wrapper [role="button"], ' +
-            '#bottom-wrapper .clickable, [data-plugin*="radar"] button, ' +
-            '[data-plugin*="radar"] [role="button"], [class*="play-button"], ' +
-            '[data-ref*="play"], [aria-label*="Play"], [aria-label*="Paus"]'
-        );
-        for (const node of nodes) {
-            if (node.closest('#we-root')) continue;
-            const rect = node.getBoundingClientRect();
-            if (!rect.width || !rect.height || rect.bottom < innerHeight - 280) continue;
-            if (event.clientX < rect.left || event.clientX > rect.right ||
-                event.clientY < rect.top || event.clientY > rect.bottom) continue;
-            const attrs = [
-                node.id, typeof node.className === 'string' ? node.className : '',
-                node.getAttribute('aria-label'), node.getAttribute('title'),
-                node.getAttribute('data-ref')
-            ].filter(Boolean).join(' ');
-            if (/(play|pause|reproduzir|pausar|animat)/i.test(attrs) &&
-                !/(display|previsão|forecast|replay-speed)/i.test(attrs)) return node;
+    function wmPlayStart(event,button){
+        if(wm.playing){
+            event.preventDefault();event.stopImmediatePropagation();
+            wmStop('Reprodução pausada.');return true;
         }
-        return null;
-    }
-
-    function nativeReplayStartOnOriginalPlay(event, button) {
-        const store = nativeReplayStore();
-        const product = store && nativeReplayProduct(store);
-        if (!product) return false;
-        if (nativeReplay.timer !== null) {
-            event.preventDefault();
-            event.stopImmediatePropagation();
-            nativeReplayStop();
-            return true;
-        }
-        nativeReplayObserve();
-        const current = nativeReplayTime(store.get('radsatTimestamp'))
-            ?? nativeReplayTime(store.get(product === 'radar' ? 'radarTimestamp' : 'satelliteTimestamp'));
-        const older = current !== null && Date.now() - current > 65 * 60000;
-        if (!older && nativeReplay.selectedHours === 1) return false;
-        const fallbackKey = ['radsatTimestamp', product === 'radar'
-            ? 'radarTimestamp' : 'satelliteTimestamp'].find(key => {
-            try { return nativeReplayTime(store.get(key)) !== null; }
-            catch (_) { return false; }
-        });
-        const choice = nativeReplayChoice(product) || ((nativeReplay.selectedHours > 1 || older) && fallbackKey
-            ? { key: fallbackKey } : null);
-        if (!choice) return false; // Play original conserva seu comportamento.
-        event.preventDefault();
-        event.stopImmediatePropagation();
-        nativeReplay.store = store;
-        nativeReplay.button = button;
-        nativeReplay.key = choice.key;
-        nativeReplay.product = product;
-        button.setAttribute('data-we-replaying', '1');
-        nativeReplay.timer = setTimeout(nativeReplayTick, 15);
+        const store=wmStore(),product=wmProduct(store);
+        if(!product)return false;
+        wmObserve();
+        const key=wmKey(store,product);
+        if(!key)return false;
+        const now=wmTime(store.get(key));
+        if(now===null)return false;
+        if(wm.hours===1&&Date.now()-now<65*60000)return false;
+        event.preventDefault();event.stopImmediatePropagation();
+        wm.playing=true;wm.product=product;wm.activeKey=key;wm.play=button;
+        button.classList.add('we-running');
+        wm.timer=setTimeout(wmTick,30);
+        setStatus('Replay dos quadros observados iniciado, velocidade do Windy preservada.');
         return true;
     }
-
-    function nativeReplayOnPointerDown(event) {
-        if (!event.isTrusted || event.button !== 0) return;
-        if (event.target.closest?.('#we-root')) return;
-        // Coordenadas cobrem inclusive um botão nativo marcado como disabled.
-        const hours = nativeReplayDurationAt(event);
-        if (hours !== null) {
-            nativeReplaySelectHours(event, hours);
-            return;
+    function wmHoursScan(){
+        const targets=new Map();
+        for(const el of document.querySelectorAll('#bottom-wrapper *,[data-plugin*="bottom-controls"] *')){
+            if(el.closest('#we-root'))continue;
+            const txt=wmText(el),m=WM_HOUR.exec(txt);
+            if(!m||[...el.children].some(x=>WM_HOUR.test(wmText(x))))continue;
+            const r=el.getBoundingClientRect();
+            if(r.width<12||r.width>130||r.height<9||r.height>80||
+                r.bottom<innerHeight-280)continue;
+            if(!targets.has(+m[1]))targets.set(+m[1],el);
         }
-        const original = nativeReplayFindPlayAt(event);
-        if (!original) {
-            if (nativeReplay.timer !== null &&
-                event.target.closest?.('#bottom-wrapper, .timeline, [data-plugin*="radar"]')) {
-                nativeReplayStop();
-            }
-            return;
+        if([1,6,24].every(h=>targets.has(h)))wm.hourEls=targets;
+        return wm.hourEls;
+    }
+    function wmFindPlay(){
+        const first=wm.hourEls.get(24)?.getBoundingClientRect();
+        if(!first)return;
+        let best=null,dist=Infinity;
+        for(const el of document.querySelectorAll('button,[role="button"],.clickable,[data-ref],div')){
+            if(el.closest('#we-root'))continue;
+            const r=el.getBoundingClientRect();
+            if(r.width<30||r.width>75||r.height<30||r.height>75||
+                r.right>first.left+12||r.right<first.left-130||
+                Math.abs((r.top+r.height/2)-(first.top+first.height/2))>40)continue;
+            const meta=[el.id,typeof el.className==='string'?el.className:'',
+                el.getAttribute('title'),el.getAttribute('data-ref'),
+                el.getAttribute('aria-label')].filter(Boolean).join(' ');
+            if(!/(play|pause|animat|click|control|button|circle)/i.test(meta)&&
+                !el.querySelector('svg,[class*="play"],button'))continue;
+            const d=Math.abs(r.right-first.left)+Math.abs(r.top-first.top);
+            if(d<dist){best=el;dist=d;}
         }
-        if (nativeReplayStartOnOriginalPlay(event, original)) {
-            nativeReplay.suppressClickUntil = Date.now() + 650;
-        }
-    }
-
-    function nativeReplayOnClick(event) {
-        // Suprime o click disparado após um pointerdown já tratado.
-        if (event.isTrusted && Date.now() < nativeReplay.suppressClickUntil &&
-            (nativeReplayDurationAt(event) !== null || nativeReplayFindPlayAt(event))) {
-            event.preventDefault();
-            event.stopImmediatePropagation();
-            return;
-        }
-        const original = nativeReplayButtonFromClick(event);
-        if (original) nativeReplayStartOnOriginalPlay(event, original);
-    }
-
-    function initNativeReplay() {
-        addCSS(
-            '[data-we-replaying="1"] { position: relative !important; }' +
-            '[data-we-replaying="1"]::after {' +
-            'content: "❚❚"; position: absolute; inset: 0; display: flex; ' +
-            'align-items: center; justify-content: center; border-radius: inherit; ' +
-            'background: #f7f7f7; color: #d00; pointer-events: none; font: bold 18px system-ui; }'
-        );
-        addCSS(
-            '[data-we-radsat-play="1"] { opacity:1 !important; filter:none !important; ' +
-            'pointer-events:auto !important; cursor:pointer !important; }' +
-            '[data-we-radsat-hours="6"], [data-we-radsat-hours="24"] {' +
-            'opacity:1 !important; filter:none !important; pointer-events:auto !important; cursor:pointer !important; }' +
-            '[data-we-radsat-selected] { background:#ad6954 !important; color:#fff !important; ' +
-            'border-radius:16px !important; }' +
-            '[data-we-radsat-deselected] { background:transparent !important; ' +
-            'box-shadow:none !important; }'
-        );
-        document.addEventListener('pointerdown', nativeReplayOnPointerDown, true);
-        document.addEventListener('click', nativeReplayOnClick, true);
-        document.addEventListener('keydown', event => {
-            if (event.isTrusted && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
-                if (nativeReplay.timer !== null) nativeReplayStop();
-                setTimeout(nativeReplayObserve, 120);
-            }
-        }, true);
-        window.addEventListener('pagehide', nativeReplayStop);
-        window.setInterval(() => {
-            if (!document.hidden) nativeReplayObserve();
-        }, 135);
-        window.setInterval(() => {
-            if (!document.hidden) nativeReplayRefreshOriginalControls();
-        }, 1100);
-        nativeReplayObserve();
-        nativeReplayRefreshOriginalControls();
-    }
-
-
-    // Mapa-base Aerial e bloqueio preventivo de ações promocionais. Não
-    // remove o mapa, os controles nativos nem atribuições cartográficas.
-    const WE_AERIAL_TEXT = /^(?:aerial|aéreo|aérea)$/i;
-    let weMapUiTimer = null;
-    const weMapUiPending = new Set();
-
-    function weUiText(el) {
-        return (el?.textContent || '').replace(/\s+/g, ' ').trim();
-    }
-
-    function weIsAerial(el) {
-        if (!(el instanceof Element) || el.closest('#we-root')) return false;
-        const name = weUiText(el);
-        return name.length <= 24 && WE_AERIAL_TEXT.test(name) &&
-            ![...el.children].some(child => WE_AERIAL_TEXT.test(weUiText(child)));
-    }
-
-    function weChooseAerial() {
-        const store = nativeReplayStore();
-        if (!store) { setStatus('Aerial: controlador do mapa indisponível.'); return; }
-        try {
-            const allowed = typeof store.getAllowed === 'function' ? store.getAllowed('map') : null;
-            if (Array.isArray(allowed) && !allowed.includes('sat')) {
-                setStatus('Aerial não consta entre os mapas disponíveis.');
-                return;
-            }
-            store.set('map', 'sat');
-            setStatus(store.get('map') === 'sat'
-                ? 'Mapa Aerial selecionado.'
-                : 'O Windy não aceitou o mapa Aerial.');
-        } catch (_) { setStatus('Aerial indisponível nesta página.'); }
-    }
-
-    function weIsPurchaseTrigger(el) {
-        if (!settings.hidePromos || !(el instanceof Element)) return false;
-        const label = weUiText(el);
-        if (label.length > 100 || el.closest('#we-root')) return false;
-        if (/^(?:obter|assinar|comprar|desbloquear|upgrade|subscribe|get|unlock|buy|go)\s+(?:(?:o|to)\s+)?(?:windy\s+)?premium(?:\s+now|\s+agora)?$/i.test(label)) return true;
-        if (el.matches('a[href*="/premium"],a[href*="upgrade"]')) return true;
-        // Não interceptar botões 1h/6h/24h, nem o mapa Aerial.
-        if (/^(?:há\s*)?(?:1|6|24)\s*h$/i.test(label) || WE_AERIAL_TEXT.test(label)) return false;
-        const title = (el.getAttribute('aria-label') || '') + ' ' +
-            (el.getAttribute('title') || '');
-        return /\b(?:get premium|subscribe|upgrade|assinar premium|obter premium)\b/i.test(title);
-    }
-
-    function weNativeUiIntercept(event) {
-        if (!event.isTrusted || event.type === 'pointerdown' && event.button !== 0 ||
-            event.type === 'keydown' && !['Enter',' '].includes(event.key)) return;
-        const path = typeof event.composedPath === 'function' ? event.composedPath() : [event.target];
-        const aerial = path.some(weIsAerial);
-        const purchase = !aerial && path.some(weIsPurchaseTrigger);
-        if (!aerial && !purchase) return;
-        event.preventDefault();
-        event.stopImmediatePropagation();
-        if (aerial) weChooseAerial();
-        else setStatus('Oferta Premium suprimida.');
-    }
-
-    function weScanMapUi(root) {
-        if (!root || root.nodeType !== 1) return;
-        const selector = 'span,button,a,[role="button"],label,li,div';
-        const elements = root.querySelectorAll ? [...root.querySelectorAll(selector)] : [];
-        if (root.matches?.(selector)) elements.unshift(root);
-        for (const el of elements) {
-            if (!weIsAerial(el)) continue;
-            const parent = el.closest('button,a,[role="button"],li,label,.clickable');
-            const control = parent && weUiText(parent).length < 100 ? parent : el;
-            control.setAttribute('data-we-aerial-control','1');
-            if (control.matches('button')) control.disabled = false;
-            control.removeAttribute('disabled');
-            control.setAttribute('aria-disabled','false');
-        }
-        if (!settings.hidePromos) return;
-        const modalSelector = 'dialog,[role="dialog"],[aria-modal="true"],.premium-modal,.paywall-modal';
-        const dialogs = root.querySelectorAll ? [...root.querySelectorAll(modalSelector)] : [];
-        if (root.matches?.(modalSelector)) dialogs.unshift(root);
-        for (const modal of dialogs) {
-            if (modal.closest('#we-root') || modal === document.body) continue;
-            const words = weUiText(modal);
-            if (words.length < 25 || words.length > 3000) continue;
-            if (/(?:windy\s+premium|premium\s+windy|assinatura\s+premium)/i.test(words) &&
-                /(?:assinar|subscribe|upgrade|ilimitad|unlimited|preço|price|year|mês|month|ano|\$)/i.test(words)) {
-                modal.setAttribute('data-we-purchase-dialog','1');
+        if(best){
+            wm.play=best;
+            if(wm.hours>1||wm.playing){
+                best.setAttribute('data-we-native-play','1');
+                best.removeAttribute('disabled');best.setAttribute('aria-disabled','false');
             }
         }
     }
-
-    function weScheduleMapUi(root) {
-        if (!root || root.nodeType !== 1) return;
-        weMapUiPending.add(root);
-        if (weMapUiTimer !== null) return;
-        weMapUiTimer = window.setTimeout(() => {
-            weMapUiTimer = null;
-            const batch = [...weMapUiPending];
-            weMapUiPending.clear();
-            for (const node of batch) if (node.isConnected) weScanMapUi(node);
-        }, 140);
+    function wmControls(){
+        if(!wmProduct(wmStore()))return;
+        const h=wmHoursScan();
+        if(h.size!==3)return;
+        for(const [hours,el]of h){
+            el.setAttribute('data-we-hour',String(hours));
+            el.classList.toggle('we-selected-hour',wm.hours===hours);
+            if(hours>1){
+                el.removeAttribute('disabled');el.setAttribute('aria-disabled','false');
+                const parent=el.closest('button,[role="button"],a,.clickable');
+                if(parent){parent.removeAttribute('disabled');parent.setAttribute('aria-disabled','false');}
+            }
+        }
+        wmFindPlay();
     }
-
-    function weInitMapUi() {
-        document.addEventListener('pointerdown', weNativeUiIntercept, true);
-        document.addEventListener('click', weNativeUiIntercept, true);
-        document.addEventListener('keydown', weNativeUiIntercept, true);
-        weScheduleMapUi(document.body);
+    function wmAt(event,el){
+        if(!el?.isConnected||typeof event.clientX!=='number')return false;
+        const r=el.getBoundingClientRect();
+        return event.clientX>=r.left&&event.clientX<=r.right&&
+            event.clientY>=r.top&&event.clientY<=r.bottom;
+    }
+    function wmAction(event){
+        for(const [h,el]of wm.hourEls)if(wmAt(event,el))return {kind:'hours',value:h};
+        if(wmAt(event,wm.aerial))return {kind:'aerial'};
+        if(wmAt(event,wm.play))return {kind:'play',value:wm.play};
+        return null;
+    }
+    function wmAerial(){
+        const store=wmStore();
+        if(!store){setStatus('O site não expôs controle de mapa para Aerial.');return;}
+        try{
+            const allowed=typeof store.getAllowed==='function'?store.getAllowed('map'):null;
+            if(Array.isArray(allowed)&&!allowed.includes('sat')){
+                setStatus('Aerial não está disponível na sessão.');return;
+            }
+            store.set('map','sat');
+            setStatus(store.get('map')==='sat'?'Mapa Aerial selecionado.':
+                'Windy recusou o mapa Aerial.');
+        }catch(_){setStatus('Mudança para Aerial não aceita pelo Windy.');}
+    }
+    function wmIsAerial(el){
+        if(!(el instanceof Element)||el.closest('#we-root'))return false;
+        return WM_AERIAL.test(wmText(el))&&wmText(el).length<25&&
+            ![...el.children].some(c=>WM_AERIAL.test(wmText(c)));
+    }
+    function wmPurchase(el){
+        if(!settings.hidePromos||!(el instanceof Element)||el.closest('#we-root'))return false;
+        if(!el.matches('button,a,[role="button"],.clickable,[data-ref]'))return false;
+        const t=wmText(el),label=(el.getAttribute('title')||'')+' '+
+            (el.getAttribute('aria-label')||'');
+        return t.length<100&&(/^(?:(?:assinar|comprar|obter|desbloquear|subscribe|upgrade|get|buy|unlock|go)\s+).{0,30}premium/i.test(t)||
+            /(?:assinar|comprar|subscribe|upgrade|get|buy).{0,30}premium/i.test(label)||
+            el.matches('a[href*="/premium"],a[href*="/subscription"]'));
+    }
+    function wmInteraction(event){
+        if(!event.isTrusted || event.type==='keydown'&&!['Enter',' '].includes(event.key) ||
+            event.type==='pointerdown'&&event.button!==0)return;
+        const path=typeof event.composedPath==='function'?event.composedPath():[event.target];
+        let action=wmAction(event);
+        const aerial=path.some(wmIsAerial);
+        if(!action&&aerial)action={kind:'aerial'};
+        if(!action&&path.some(wmPurchase))action={kind:'purchase'};
+        if(!action)return;
+        if(event.type==='click'&&Date.now()<wm.ignoreClickUntil){
+            event.preventDefault();event.stopImmediatePropagation();return;
+        }
+        if(action.kind==='hours'&&action.value===1){wm.hours=1;wmStop();wmControls();return;}
+        if(action.kind==='play'&&!wmPlayStart(event,action.value))return;
+        if(action.kind==='hours'&&action.value!==1){
+            event.preventDefault();event.stopImmediatePropagation();wmStop();
+            wm.hours=action.value;wmControls();
+            setStatus('Janela '+wm.hours+'h definida para quadros acessíveis.');
+        }else if(action.kind==='aerial'||action.kind==='purchase'){
+            event.preventDefault();event.stopImmediatePropagation();
+            if(action.kind==='aerial')wmAerial();
+            else setStatus('Oferta Premium bloqueada.');
+        }
+        if(event.type==='pointerdown')wm.ignoreClickUntil=Date.now()+550;
+    }
+    function wmScanAerialAndHeading(root){
+        if(!root?.querySelectorAll)return;
+        const els=[...(root.matches?.('div,span,button,a,label,li')?[root]:[]),
+            ...root.querySelectorAll('div,span,button,a,label,li')];
+        for(const el of els){
+            if(wmIsAerial(el)){
+                const parent=el.closest('button,a,[role="button"],li,.clickable')||el.parentElement||el;
+                if(wmText(parent).length>100)continue;
+                wm.aerial=parent;parent.setAttribute('data-we-aerial','1');
+                parent.removeAttribute('disabled');parent.setAttribute('aria-disabled','false');
+            }
+            if(settings.hideBranding&&/^Outdoor maps provided by Mapy\.com$/i.test(wmText(el))&&
+               ![...el.children].some(x=>/^Outdoor maps provided by Mapy\.com$/i.test(wmText(x))))
+                el.setAttribute('data-we-mapy-selector-heading','1');
+        }
+    }
+    function wmScanModal(root){
+        if(!settings.hidePromos||!root?.querySelectorAll)return;
+        for(const heading of root.querySelectorAll('h1,h2,h3,div,span,b,strong')){
+            if(!/^(?:windy premium|premium windy)$/i.test(wmText(heading)))continue;
+            let node=heading;
+            for(let n=0;node&&n<9;n++,node=node.parentElement){
+                if(node===document.body||node===document.documentElement)break;
+                const txt=wmText(node);
+                if(txt.length>4500)break;
+                if(!/(?:premium inclui|assinatura anual|comprar por um ano|subscription)/i.test(txt))continue;
+                const r=node.getBoundingClientRect();
+                if(r.width>260&&r.width<850&&r.height>300&&r.height<=innerHeight+120){
+                    node.setAttribute('data-we-premium-dialog','1');
+                    const p=node.parentElement;
+                    if(p&&p!==document.body&&p!==document.documentElement){
+                        const b=p.getBoundingClientRect();
+                        if(b.width>innerWidth*.92&&b.height>innerHeight*.9&&p.children.length<6)
+                            p.setAttribute('data-we-premium-backdrop','1');
+                    }
+                    break;
+                }
+            }
+        }
+    }
+    function wmScanBrand(root){
+        if(!settings.hideBranding||!root?.querySelectorAll)return;
+        const els=[...(root.matches?.('img,svg,a,[title],[aria-label],[class*="logo"],span')?[root]:[]),
+            ...root.querySelectorAll('img,svg,a,[title],[aria-label],[class*="logo"],span')];
+        for(const el of els){
+            if(el.closest('#we-root'))continue;
+            const meta=[el.getAttribute('alt'),el.getAttribute('src'),
+                el.getAttribute('title'),el.getAttribute('aria-label'),
+                el.getAttribute('href'),typeof el.className==='string'?el.className:'',
+                el.matches('span,a')?wmText(el).slice(0,80):''].filter(Boolean).join(' ');
+            if(!/nowcast|noaa|cemaden/i.test(meta))continue;
+            const r=el.getBoundingClientRect();
+            if(r.width<8||r.width>260||r.height<8||r.height>140||
+                r.right<innerWidth*.50||r.top<innerHeight*.25)continue;
+            const p=el.closest('a,[class*="logo"],[class*="branding"]');
+            const candidate=p&&p.getBoundingClientRect().width<=280?p:el;
+            candidate.setAttribute('data-we-provider-logo','1');
+        }
+    }
+    function wmQueueScan(root){
+        if(!root||root.nodeType!==1)return;
+        wm.scanPending.add(root);
+        if(wm.scanTimer!==null)return;
+        wm.scanTimer=setTimeout(()=>{
+            wm.scanTimer=null;const batch=[...wm.scanPending];wm.scanPending.clear();
+            for(const node of batch)if(node.isConnected){
+                wmScanAerialAndHeading(node);wmScanModal(node);wmScanBrand(node);
+            }
+        },150);
+    }
+    function initWindyNative() {
+        for(const type of ['pointerdown','click','keydown'])
+            window.addEventListener(type,wmInteraction,true);
+        window.addEventListener('keydown',ev=>{
+            if(!ev.isTrusted||!['ArrowLeft','ArrowRight'].includes(ev.key))return;
+            if(wm.playing)wmStop();
+            setTimeout(wmObserve,90);setTimeout(wmObserve,260);
+        },true);
+        window.addEventListener('pagehide',()=>wmStop());
+        setInterval(()=>{if(!document.hidden)wmObserve();},120);
+        setInterval(()=>{if(!document.hidden){wmControls();wmQueueScan(document.body);}},1500);
+        wmControls();wmObserve();wmQueueScan(document.body);
+        try{
+            const p=typeof unsafeWindow!=='undefined'?unsafeWindow:window;
+            Object.defineProperty(p,'WindyEnhancedStatus',{configurable:true,value:()=>({
+                version:VERSION,store:!!wmStore(),product:wmProduct(wmStore()),
+                hours:wm.hours,playing:wm.playing,activeKey:wm.activeKey,
+                lastChanged:wm.lastChanged,
+                sampled:Object.fromEntries([...wm.sampled[wm.product||'radar']].map(([k,v])=>[k,v.size])),
+                reason:wm.reason
+            })});
+        }catch(_){}
     }
 
     function start() {
         applySettings();
         initUI();
-        weInitMapUi();
-        initNativeReplay();
+        initWindyNative();
         scheduleScan(document.body);
         scheduleWindyLayout();
         const observer = new MutationObserver(records => {
@@ -1486,7 +1256,7 @@
                 for (const node of record.addedNodes) {
                     if (node.nodeType === 1) {
                         hasAddedElement = true;
-                        weScheduleMapUi(node);
+                        wmQueueScan(node);
                     }
                     if (settings.hidePromos || settings.hideArchive) scheduleScan(node);
                 }
