@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Windy Enhanced - Cores, Interface e Controles
 // @namespace    https://www.windy.com/
-// @version      6.4.3
+// @version      6.4.4
 // @description  Melhora a interface do Windy com opções visuais, visualização limpa, favoritos de visualização e controles opcionais da linha do tempo.
 // @author       Henrique / Puglia Apps
 // @match        https://www.windy.com/*
@@ -23,7 +23,7 @@
 
     // Windy Enhanced 6.4 - interface local. Nenhuma requisição externa,
     // alteração de credenciais ou simulação de assinatura.
-    const VERSION = '6.4.3';
+    const VERSION = '6.4.4';
     const STORAGE_KEY = 'windy-enhanced:v6:settings';
     const ALLOWED_VIEW_ORIGINS = new Set(['https://windy.com', 'https://www.windy.com']);
     const DEFAULTS = Object.freeze({
@@ -132,6 +132,20 @@
         html.we-hide-promos [data-ref="premiumFlag"],
         html.we-hide-promos [data-we-promo-hidden="1"] {
             display: none !important;
+        }
+
+        /* Suprime somente diálogos comerciais identificados. */
+        html.we-hide-promos [data-we-purchase-dialog="1"],
+        html.we-hide-promos .paywall-modal,
+        html.we-hide-promos .premium-modal {
+            display: none !important;
+        }
+        /* Conserva o controle Aerial nativo na lista de mapas. */
+        html [data-we-aerial-control="1"] {
+            opacity: 1 !important;
+            filter: none !important;
+            pointer-events: auto !important;
+            cursor: pointer !important;
         }
 
         html.we-restore-colors .premium-calendar #map-container,
@@ -938,7 +952,7 @@
         for (const key of keys) {
             const frames = nativeReplayFrames(key);
             // Não substitui o Play original para reproduzir apenas a última hora.
-            if (frames.length >= 3 && frames[frames.length - 1] - frames[0] > 65 * 60000) {
+            if (frames.length >= 2 && (nativeReplay.selectedHours > 1 || frames[frames.length - 1] - frames[0] > 65 * 60000)) {
                 return { key, frames };
             }
         }
@@ -955,6 +969,34 @@
         nativeReplay.store = null;
     }
 
+    function nativeReplayFrameDelay(store) {
+        try {
+            const setting = store.get('animationSpeed');
+            if (typeof setting === 'number' && Number.isFinite(setting) && setting > 0) {
+                return Math.max(70, Math.min(1500, Math.round(430 / setting)));
+            }
+            const speed = String(setting || '').toLowerCase();
+            if (/very.?fast|ultra|fastest|4x/.test(speed)) return 115;
+            if (/fast|2x/.test(speed)) return 220;
+            if (/slow|0\.5x/.test(speed)) return 850;
+        } catch (_) {}
+        return nativeReplay.frameMs;
+    }
+
+    function nativeReplayKeyboardAdvance() {
+        // Se a página aceita eventos sintéticos, usa o mesmo atalho de navegação
+        // que o usuário pressiona manualmente. O navegador não permite criar
+        // eventos com isTrusted=true, portanto o Windy pode ignorá-los.
+        document.dispatchEvent(new KeyboardEvent('keydown', {
+            key: 'ArrowRight', code: 'ArrowRight', bubbles: true,
+            cancelable: true, keyCode: 39, which: 39
+        }));
+        document.dispatchEvent(new KeyboardEvent('keyup', {
+            key: 'ArrowRight', code: 'ArrowRight', bubbles: true,
+            cancelable: true, keyCode: 39, which: 39
+        }));
+    }
+
     function nativeReplayTick() {
         if (nativeReplay.timer === null) return;
         const { key, product, store } = nativeReplay;
@@ -964,21 +1006,37 @@
             return;
         }
 
+        nativeReplayObserve();
         const frames = nativeReplayFrames(key);
-        if (frames.length < 3) { nativeReplayStop(); return; }
-
         try {
             const now = nativeReplayTime(store.get(key));
             if (now === null) { nativeReplayStop(); return; }
-            const target = frames.find(t => t > now) ?? frames[0];
-            store.set(key, target);
-            const actual = nativeReplayTime(store.get(key));
-            if (actual === null || Math.abs(actual - target) > 60000) {
-                nativeReplayStop();
-                return;
+            const lower = Date.now() - nativeReplay.selectedHours * 3600000;
+            const eligible = nativeReplay.selectedHours > 1
+                ? frames.filter(t => t >= lower) : frames;
+            if (eligible.length >= 2) {
+                const target = eligible.find(t => t > now) ?? eligible[0];
+                store.set(key, target);
+                const actual = nativeReplayTime(store.get(key));
+                if (actual === null || Math.abs(actual - target) > 60000) {
+                    nativeReplayStop();
+                    return;
+                }
+            } else {
+                // Primeiro tenta exatamente a navegação das setas, já que ela
+                // pode funcionar mesmo quando a store não lista os quadros.
+                nativeReplayKeyboardAdvance();
+                const after = nativeReplayTime(store.get(key));
+                if (after !== null && after !== now) {
+                    nativeReplayObserve();
+                } else {
+                    nativeReplayStop();
+                    setStatus('O Windy não aceitou o avanço por teclado simulado. Os dados precisam estar acessíveis pelo controlador de tempo.');
+                    return;
+                }
             }
         } catch (_) { nativeReplayStop(); return; }
-        nativeReplay.timer = setTimeout(nativeReplayTick, nativeReplay.frameMs);
+        nativeReplay.timer = setTimeout(nativeReplayTick, nativeReplayFrameDelay(store));
     }
 
     // O botão circular de Play é do Windy. A detecção exige rótulo/classe de
@@ -1217,7 +1275,8 @@
             ?? nativeReplayTime(store.get(product === 'radar' ? 'radarTimestamp' : 'satelliteTimestamp'));
         const older = current !== null && Date.now() - current > 65 * 60000;
         if (!older && nativeReplay.selectedHours === 1) return false;
-        const choice = nativeReplayChoice(product);
+        const choice = nativeReplayChoice(product) || (nativeReplay.selectedHours > 1
+            ? { key: 'radsatTimestamp' } : null);
         if (!choice) return false; // Play original conserva seu comportamento.
         event.preventDefault();
         event.stopImmediatePropagation();
@@ -1301,9 +1360,118 @@
         nativeReplayRefreshOriginalControls();
     }
 
+
+    // Mapa-base Aerial e bloqueio preventivo de ações promocionais. Não
+    // remove o mapa, os controles nativos nem atribuições cartográficas.
+    const WE_AERIAL_TEXT = /^(?:aerial|aéreo|aérea)$/i;
+    let weMapUiTimer = null;
+    const weMapUiPending = new Set();
+
+    function weUiText(el) {
+        return (el?.textContent || '').replace(/\s+/g, ' ').trim();
+    }
+
+    function weIsAerial(el) {
+        if (!(el instanceof Element) || el.closest('#we-root')) return false;
+        const name = weUiText(el);
+        return name.length <= 24 && WE_AERIAL_TEXT.test(name) &&
+            ![...el.children].some(child => WE_AERIAL_TEXT.test(weUiText(child)));
+    }
+
+    function weChooseAerial() {
+        const store = nativeReplayStore();
+        if (!store) { setStatus('Aerial: controlador do mapa indisponível.'); return; }
+        try {
+            const allowed = typeof store.getAllowed === 'function' ? store.getAllowed('map') : null;
+            if (Array.isArray(allowed) && !allowed.includes('sat')) {
+                setStatus('Aerial não consta entre os mapas disponíveis.');
+                return;
+            }
+            store.set('map', 'sat');
+            setStatus(store.get('map') === 'sat'
+                ? 'Mapa Aerial selecionado.'
+                : 'O Windy não aceitou o mapa Aerial.');
+        } catch (_) { setStatus('Aerial indisponível nesta página.'); }
+    }
+
+    function weIsPurchaseTrigger(el) {
+        if (!settings.hidePromos || !(el instanceof Element)) return false;
+        const label = weUiText(el);
+        if (label.length > 100 || el.closest('#we-root')) return false;
+        if (/^(?:obter|assinar|comprar|desbloquear|upgrade|subscribe|get|unlock|buy|go)\s+(?:(?:o|to)\s+)?(?:windy\s+)?premium(?:\s+now|\s+agora)?$/i.test(label)) return true;
+        if (el.matches('a[href*="/premium"],a[href*="upgrade"]')) return true;
+        // Não interceptar botões 1h/6h/24h, nem o mapa Aerial.
+        if (/^(?:há\s*)?(?:1|6|24)\s*h$/i.test(label) || WE_AERIAL_TEXT.test(label)) return false;
+        const title = (el.getAttribute('aria-label') || '') + ' ' +
+            (el.getAttribute('title') || '');
+        return /\b(?:get premium|subscribe|upgrade|assinar premium|obter premium)\b/i.test(title);
+    }
+
+    function weNativeUiIntercept(event) {
+        if (!event.isTrusted || event.type === 'pointerdown' && event.button !== 0 ||
+            event.type === 'keydown' && !['Enter',' '].includes(event.key)) return;
+        const path = typeof event.composedPath === 'function' ? event.composedPath() : [event.target];
+        const aerial = path.some(weIsAerial);
+        const purchase = !aerial && path.some(weIsPurchaseTrigger);
+        if (!aerial && !purchase) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        if (aerial) weChooseAerial();
+        else setStatus('Oferta Premium suprimida.');
+    }
+
+    function weScanMapUi(root) {
+        if (!root || root.nodeType !== 1) return;
+        const selector = 'span,button,a,[role="button"],label,li,div';
+        const elements = root.querySelectorAll ? [...root.querySelectorAll(selector)] : [];
+        if (root.matches?.(selector)) elements.unshift(root);
+        for (const el of elements) {
+            if (!weIsAerial(el)) continue;
+            const parent = el.closest('button,a,[role="button"],li,label,.clickable');
+            const control = parent && weUiText(parent).length < 100 ? parent : el;
+            control.setAttribute('data-we-aerial-control','1');
+            if (control.matches('button')) control.disabled = false;
+            control.removeAttribute('disabled');
+            control.setAttribute('aria-disabled','false');
+        }
+        if (!settings.hidePromos) return;
+        const modalSelector = 'dialog,[role="dialog"],[aria-modal="true"],.premium-modal,.paywall-modal';
+        const dialogs = root.querySelectorAll ? [...root.querySelectorAll(modalSelector)] : [];
+        if (root.matches?.(modalSelector)) dialogs.unshift(root);
+        for (const modal of dialogs) {
+            if (modal.closest('#we-root') || modal === document.body) continue;
+            const words = weUiText(modal);
+            if (words.length < 25 || words.length > 3000) continue;
+            if (/(?:windy\s+premium|premium\s+windy|assinatura\s+premium)/i.test(words) &&
+                /(?:assinar|subscribe|upgrade|ilimitad|unlimited|preço|price|year|mês|month|ano|\$)/i.test(words)) {
+                modal.setAttribute('data-we-purchase-dialog','1');
+            }
+        }
+    }
+
+    function weScheduleMapUi(root) {
+        if (!root || root.nodeType !== 1) return;
+        weMapUiPending.add(root);
+        if (weMapUiTimer !== null) return;
+        weMapUiTimer = window.setTimeout(() => {
+            weMapUiTimer = null;
+            const batch = [...weMapUiPending];
+            weMapUiPending.clear();
+            for (const node of batch) if (node.isConnected) weScanMapUi(node);
+        }, 140);
+    }
+
+    function weInitMapUi() {
+        document.addEventListener('pointerdown', weNativeUiIntercept, true);
+        document.addEventListener('click', weNativeUiIntercept, true);
+        document.addEventListener('keydown', weNativeUiIntercept, true);
+        weScheduleMapUi(document.body);
+    }
+
     function start() {
         applySettings();
         initUI();
+        weInitMapUi();
         initNativeReplay();
         scheduleScan(document.body);
         scheduleWindyLayout();
@@ -1311,7 +1479,10 @@
             let hasAddedElement = false;
             for (const record of records) {
                 for (const node of record.addedNodes) {
-                    if (node.nodeType === 1) hasAddedElement = true;
+                    if (node.nodeType === 1) {
+                        hasAddedElement = true;
+                        weScheduleMapUi(node);
+                    }
                     if (settings.hidePromos || settings.hideArchive) scheduleScan(node);
                 }
             }
