@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Windy Enhanced - Cores, Interface e Controles
 // @namespace    https://www.windy.com/
-// @version      6.6.0
+// @version      6.6.1
 // @description  Melhora a interface do Windy com opções visuais, visualização limpa, favoritos de visualização e controles opcionais da linha do tempo.
 // @author       Henrique / Puglia Apps
 // @match        https://www.windy.com/*
@@ -23,7 +23,7 @@
 
     // Windy Enhanced 6.4 - interface local. Nenhuma requisição externa,
     // alteração de credenciais ou simulação de assinatura.
-    const VERSION = '6.6.0';
+    const VERSION = '6.6.1';
     const STORAGE_KEY = 'windy-enhanced:v6:settings';
     const ALLOWED_VIEW_ORIGINS = new Set(['https://windy.com', 'https://www.windy.com']);
     const DEFAULTS = Object.freeze({
@@ -897,7 +897,8 @@
         last:Object.create(null),lastChanged:null,hourEls:new Map(),aerial:null,
         ignoreClickUntil:0,reason:'',scanTimer:null,scanPending:new Set(),
         plan:[],planKey:null,lastTarget:null,failures:0,recordedMax:null,
-        playEvents:0,segmentFailures:0};
+        playEvents:0,segmentFailures:0,eventsStore:null,
+        arrowUntil:0,arrowKey:null,subscribedKeys:[]};
     const WM_KEYS=['radarTimestamp','satelliteTimestamp','radsatTimestamp'];
     const WM_HOUR=/^(?:(?:há|ago)\s*)?(24|6|1)\s*h$/i;
     const WM_AERIAL=/^(?:aerial|aéreo|aérea)$/i;
@@ -984,6 +985,24 @@
         return actual!==null&&Math.abs(actual-frame.time)<=60000;
     }
 
+    // Event subscriptions capture EVERY clock change from real keyboard
+    // navigation, including changes between 120ms polling intervals.
+    function wmSubscribeStore(){
+        const store=wmStore();
+        if(!store || store===wm.eventsStore || typeof store.on!=='function')return;
+        wm.eventsStore=store;
+        wm.subscribedKeys=[];
+        for(const key of WM_KEYS){
+            try{
+                store.on(key,()=>{
+                    if(Date.now()<wm.arrowUntil)wm.arrowKey=key;
+                    wmObserve();
+                });
+                wm.subscribedKeys.push(key);
+            }catch(_){}
+        }
+    }
+
     function wmObserve(){
         const store=wmStore(),product=wmProduct(store);
         if(!product)return;
@@ -1012,69 +1031,37 @@
         }
     }
     function wmKey(store,product){
-        const candidates=product==='radar'
-            ?['radsatTimestamp','radarTimestamp']
-            :['radsatTimestamp','satelliteTimestamp'];
-        // Preferir o relógio comum à timeline Radar+. Se este não variar,
-        // usar a chave específica que a navegação manual efetivamente muda.
-        const counts=candidates.map(key=>({key,count:wm.sampled[product].get(key)?.size||0}));
-        const rendered=counts.find(x=>x.key==='radsatTimestamp'&&x.count>=2);
-        if(rendered)return rendered.key;
-        const moved=counts.find(x=>x.key===wm.lastChanged&&x.count>=2);
-        if(moved)return moved.key;
+        const preferred=product==='radar'
+            ? ['radarTimestamp','radsatTimestamp']
+            : ['satelliteTimestamp','radsatTimestamp'];
+        // The timestamp changed by the user's physical arrow presses is the
+        // strongest evidence of which clock drives the visible timeline.
+        if(wm.arrowKey && preferred.includes(wm.arrowKey) &&
+            (wm.sampled[product].get(wm.arrowKey)?.size||0)>=2)
+            return wm.arrowKey;
+        const counts=preferred.map(key=>({key,count:wm.sampled[product].get(key)?.size||0}));
+        const last=counts.find(x=>x.key===wm.lastChanged&&x.count>=2);
+        if(last)return last.key;
         counts.sort((a,b)=>b.count-a.count);
-        for(const x of counts){
-            try{if(wmTime(store.get(x.key))!==null)return x.key;}catch(_){}
+        for(const item of counts){
+            try{if(wmTime(store.get(item.key))!==null)return item.key;}catch(_){}
         }
         return null;
     }
-    // Use the same clock the arrow keys move, never the normal 1h player.
-    // Interpolate between observed positions so manual scrubbing of the whole
-    // timeline does not leave huge jumps between isolated sampled frames.
-    // store.set() is responsible for requesting the appropriate Windy frame.
     function wmBuildPlan(store,product,key){
+        // Do not manufacture dates between two observed frames. The previous
+        // interpolation flooded Windy with image requests that were cancelled.
         wmAddAllowedFrames(store,product,key);
-        const entries=wmSequence(product,-Infinity,key);
         let current=null;
         try{current=wmTime(store.get(key));}catch(_){}
         if(current===null)return [];
-        const now=Date.now(),limitMin=now-26*3600000,limitMax=now+75*60000;
-        const seen=entries.map(e=>e.time).concat([current]).filter(v=>v>=limitMin&&v<=limitMax);
-        if(!seen.length)return [];
-        const minSeen=Math.min(...seen),maxSeen=Math.max(...seen);
-        let min=minSeen,max=maxSeen;
-        if(wm.hours>1 && min>now-wm.hours*3600000+10*60000)
-            min=Math.max(limitMin,now-wm.hours*3600000);
-        // Do not fabricate a forecast range. If it has been visited, include
-        // the observed red portion; otherwise loop over what was displayed.
-        // When the user clicks at the far-left edge before navigating across
-        // the whole timeline, there may be only one observed timestamp.
-        // Extend toward the present using the same Windy time controller.
-        // Unavailable data is rejected by the site; no external downloads.
-        if(max<=min){
-            if(min<now-65*60000){
-                max=Math.min(limitMax,now);
-            }else{
-                min=Math.max(limitMin,now-3600000);
-                max=Math.min(limitMax,now+50*60000);
-            }
-        }
-        if(max<=min)return [];
-        const diffs=seen.slice().sort((a,b)=>a-b).slice(1).map((v,i,a)=>
-            v-seen.slice().sort((x,y)=>x-y)[i]).filter(d=>d>=60000&&d<=15*60000);
-        const sorted=diffs.sort((a,b)=>a-b);
-        const step=sorted.length?Math.max(60000,Math.min(10*60000,sorted[Math.floor(sorted.length/2)])):5*60000;
-        let times=new Set(seen);
-        // Bounded at 650 frames, matching the existing sampling budget.
-        const slots=Math.ceil((max-min)/step)+1;
-        const actualStep=slots>650?Math.ceil((max-min)/649/60000)*60000:step;
-        for(let t=min; t<=max && times.size<650; t+=actualStep)times.add(t);
-        times.add(min);times.add(max);
-        const snapshots=wm.segments[product].get(key);
-        const keys=[...times].filter(t=>t>=limitMin&&t<=limitMax).sort((a,b)=>a-b);
-        return keys.map(time=>({time,key,segment:snapshots?.get(time)}));
+        const cutoff=wm.hours>1?Date.now()-wm.hours*3600000-20*60000:-Infinity;
+        const frames=wmSequence(product,cutoff,key);
+        const merged=new Map(frames.map(frame=>[frame.time,frame]));
+        if(current>=cutoff&&!merged.has(current))
+            merged.set(current,{time:current,key,segment:wmSegment(store)});
+        return [...merged.values()].sort((a,b)=>a.time-b.time).slice(-650);
     }
-
     function wmSpeed(store){
         let speed;try{speed=store.get('animationSpeed');}catch(_){}
         if(typeof speed==='number'&&speed>0&&Number.isFinite(speed))
@@ -1138,7 +1125,7 @@
 
         // Respect the site's frame rendering; avoid pushing through a backlog.
         wm.lastTarget=frame.time;
-        const deadline=Date.now()+1500;
+        const deadline=Date.now()+2600;
         const render=()=>{
             if(!wm.playing)return;
             if(document.hidden||wmStore()!==store||wmProduct(store)!==product){
@@ -1158,8 +1145,18 @@
                 wmStop('O Windy alterou o horário externamente. Replay interrompido para evitar saltos.');
                 return;
             }
-            if(rendered!==null&&Math.abs(rendered-selected)>60000&&Date.now()<deadline){
-                wm.timer=setTimeout(render,80);return;
+            if(rendered!==null&&Math.abs(rendered-selected)>60000){
+                if(Date.now()<deadline){
+                    wm.timer=setTimeout(render,100);
+                    return;
+                }
+                // Stop rather than discarding unfinished map tiles repeatedly.
+                let loading=false;
+                try{loading=store.get('tileLayerLoaderPresent')===true;}catch(_){}
+                if(loading){
+                    wmStop('Quadro ainda carregando: replay pausado para evitar cancelamentos de tiles.');
+                    return;
+                }
             }
             wmObserve();
             wm.timer=setTimeout(wmTick,wmSpeed(store));
@@ -1189,7 +1186,9 @@
         }
         // Some Windy builds reset the timestamp when animation is stopped.
         // Restore the timestamp chosen by the user before beginning playback.
-        const chosenTime=now;
+        let chosenTime=null;
+        try{chosenTime=wmTime(store.get(key));}catch(_){}
+        if(chosenTime===null){setStatus('Horário do radar não disponível.');return true;}
         wmStopOriginalAnimation(store);
         try{
             const afterStop=wmTime(store.get(key));
@@ -1222,34 +1221,28 @@
         if(wm.playing&&wm.play?.isConnected)return;
         const first=wm.hourEls.get(24)?.getBoundingClientRect();
         if(!first)return;
-        let best=null,score=Infinity;
-        // The circular Play is immediately to the left of 24h.
-        const nodes=document.querySelectorAll(
-            '#bottom-wrapper button,#bottom-wrapper [role="button"],#bottom-wrapper .clickable,'+
-            '#bottom-wrapper [data-ref],#bottom-wrapper div,'+
-            '[data-plugin*="bottom-controls"] button,[data-plugin*="bottom-controls"] .clickable'
-        );
-        for(const el of nodes){
+        let best=null,rank=Infinity;
+        // Play is normally OUTSIDE #bottom-wrapper, to the left of "24h".
+        // The old selector only searched inside the wrapper and missed it.
+        for(const el of document.querySelectorAll('button,[role="button"],.clickable,[data-ref],div')){
             if(el.closest('#we-root'))continue;
-            const r=el.getBoundingClientRect();
-            if(r.width<28||r.width>76||r.height<28||r.height>76)continue;
-            const cx=r.left+r.width/2,cy=r.top+r.height/2;
-            const wantedX=first.left-54,wantedY=first.top+first.height/2;
-            if(cx>first.left+10||cx<first.left-155||Math.abs(cy-wantedY)>42)continue;
+            const rect=el.getBoundingClientRect();
+            if(rect.width<26||rect.width>76||rect.height<26||rect.height>76)continue;
+            const cx=rect.left+rect.width/2,cy=rect.top+rect.height/2;
+            const goalX=first.left-42,goalY=first.top+first.height/2;
+            if(cx>=first.left+4||cx<first.left-155||Math.abs(cy-goalY)>42)continue;
             const meta=[el.id,typeof el.className==='string'?el.className:'',
-                el.getAttribute('title'),el.getAttribute('data-ref'),
-                el.getAttribute('aria-label')].filter(Boolean).join(' ');
-            const semantic=/(play|pause|animat|start|control|click|button|circle)/i.test(meta);
+                el.getAttribute('aria-label'),el.getAttribute('data-ref'),
+                el.getAttribute('title')].filter(Boolean).join(' ');
+            const isControl=el.matches('button,[role="button"],.clickable,[data-ref]');
             const icon=!!el.querySelector('svg,[class*="play"],[class*="pause"],button');
-            if(!semantic&&!icon)continue;
-            const rank=Math.abs(cx-wantedX)+Math.abs(cy-wantedY)+
-                (semantic?0:16)+(el.matches('button,[role="button"],.clickable')?0:12);
-            if(rank<score){best=el;score=rank;}
+            if(!isControl&&!icon&&!/(play|pause|animation)/i.test(meta))continue;
+            const distance=Math.abs(cx-goalX)+Math.abs(cy-goalY)+
+                (isControl?0:14)+(/play|pause|animation/i.test(meta)?0:10);
+            if(distance<rank){best=el;rank=distance;}
         }
         if(!best)return;
         wm.play=best;
-        // Reactivate the EXISTING circular Play even at the far left,
-        // without a new toolbar and without enabling any unrelated widgets.
         for(const node of [best,best.closest('button,[role="button"]')].filter(Boolean)){
             node.setAttribute('data-we-native-play','1');
             node.removeAttribute('disabled');
@@ -1428,12 +1421,18 @@
     function initWindyNative() {
         window.addEventListener('keydown',ev=>{
             if(!ev.isTrusted||!['ArrowLeft','ArrowRight'].includes(ev.key))return;
+            wm.arrowUntil=Date.now()+600;
             if(wm.playing)wmStop();
             setTimeout(wmObserve,90);setTimeout(wmObserve,260);
         },true);
         window.addEventListener('pagehide',()=>wmStop());
         window.addEventListener('blur',()=>{if(wm.playing)wmStop('Replay pausado pela mudança de janela.');});
-        setInterval(()=>{if(!document.hidden)wmObserve();},120);
+        wmSubscribeStore();
+        setInterval(()=>{
+            if(document.hidden)return;
+            wmSubscribeStore();
+            wmObserve();
+        },180);
         setInterval(()=>{if(!document.hidden){wmControls();wmQueueScan(document.body);}},1500);
         wmControls();wmObserve();wmQueueScan(document.body);
         try{
@@ -1443,6 +1442,12 @@
                 hours:wm.hours,playing:wm.playing,activeKey:wm.activeKey,
                 effectiveTimeline:wm.hours===1?'todos os quadros observados':wm.hours+'h',
                 playbackFrames:wm.plan.length,playEvents:wm.playEvents,
+                arrowClock:wm.arrowKey,subscribedKeys:[...wm.subscribedKeys],
+                playFound:Boolean(wm.play?.isConnected),
+                playRect:wm.play?.isConnected ? (()=>{
+                    const r=wm.play.getBoundingClientRect();
+                    return {x:Math.round(r.x),y:Math.round(r.y),w:Math.round(r.width),h:Math.round(r.height)};
+                })():null,
                 nativeAnimation:(()=>{try{return wmStore()?.get('animation')}catch(_){return null}})(),
                 timelineNow:(()=>{try{return wmStore()?.get(wm.planKey||wmKey(wmStore(),wm.product||'radar'))}catch(_){return null}})(),
                 lastChanged:wm.lastChanged,
