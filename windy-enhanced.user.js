@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Windy Enhanced - Cores, Interface e Controles
 // @namespace    https://www.windy.com/
-// @version      6.5.3
+// @version      6.6.0
 // @description  Melhora a interface do Windy com opções visuais, visualização limpa, favoritos de visualização e controles opcionais da linha do tempo.
 // @author       Henrique / Puglia Apps
 // @match        https://www.windy.com/*
@@ -23,7 +23,7 @@
 
     // Windy Enhanced 6.4 - interface local. Nenhuma requisição externa,
     // alteração de credenciais ou simulação de assinatura.
-    const VERSION = '6.5.3';
+    const VERSION = '6.6.0';
     const STORAGE_KEY = 'windy-enhanced:v6:settings';
     const ALLOWED_VIEW_ORIGINS = new Set(['https://windy.com', 'https://www.windy.com']);
     const DEFAULTS = Object.freeze({
@@ -895,7 +895,9 @@
         activeKey:null,sampled:{radar:new Map(),satellite:new Map()},
         segments:{radar:new Map(),satellite:new Map()},
         last:Object.create(null),lastChanged:null,hourEls:new Map(),aerial:null,
-        ignoreClickUntil:0,reason:'',scanTimer:null,scanPending:new Set()};
+        ignoreClickUntil:0,reason:'',scanTimer:null,scanPending:new Set(),
+        plan:[],planKey:null,lastTarget:null,failures:0,recordedMax:null,
+        playEvents:0,segmentFailures:0};
     const WM_KEYS=['radarTimestamp','satelliteTimestamp','radsatTimestamp'];
     const WM_HOUR=/^(?:(?:há|ago)\s*)?(24|6|1)\s*h$/i;
     const WM_AERIAL=/^(?:aerial|aéreo|aérea)$/i;
@@ -1026,6 +1028,42 @@
         }
         return null;
     }
+    // Use the same clock the arrow keys move, never the normal 1h player.
+    // Interpolate between observed positions so manual scrubbing of the whole
+    // timeline does not leave huge jumps between isolated sampled frames.
+    // store.set() is responsible for requesting the appropriate Windy frame.
+    function wmBuildPlan(store,product,key){
+        wmAddAllowedFrames(store,product,key);
+        const entries=wmSequence(product,-Infinity,key);
+        let current=null;
+        try{current=wmTime(store.get(key));}catch(_){}
+        if(current===null)return [];
+        const now=Date.now(),limitMin=now-26*3600000,limitMax=now+75*60000;
+        const seen=entries.map(e=>e.time).concat([current]).filter(v=>v>=limitMin&&v<=limitMax);
+        if(!seen.length)return [];
+        const minSeen=Math.min(...seen),maxSeen=Math.max(...seen);
+        let min=minSeen,max=maxSeen;
+        if(wm.hours>1 && min>now-wm.hours*3600000+10*60000)
+            min=Math.max(limitMin,now-wm.hours*3600000);
+        // Do not fabricate a forecast range. If it has been visited, include
+        // the observed red portion; otherwise loop over what was displayed.
+        if(max<=min && wm.hours>1) max=Math.min(limitMax,now);
+        if(max<=min)return [];
+        const diffs=seen.slice().sort((a,b)=>a-b).slice(1).map((v,i,a)=>
+            v-seen.slice().sort((x,y)=>x-y)[i]).filter(d=>d>=60000&&d<=15*60000);
+        const sorted=diffs.sort((a,b)=>a-b);
+        const step=sorted.length?Math.max(60000,Math.min(10*60000,sorted[Math.floor(sorted.length/2)])):5*60000;
+        let times=new Set(seen);
+        // Bounded at 650 frames, matching the existing sampling budget.
+        const slots=Math.ceil((max-min)/step)+1;
+        const actualStep=slots>650?Math.ceil((max-min)/649/60000)*60000:step;
+        for(let t=min; t<=max && times.size<650; t+=actualStep)times.add(t);
+        times.add(min);times.add(max);
+        const snapshots=wm.segments[product].get(key);
+        const keys=[...times].filter(t=>t>=limitMin&&t<=limitMax).sort((a,b)=>a-b);
+        return keys.map(time=>({time,key,segment:snapshots?.get(time)}));
+    }
+
     function wmSpeed(store){
         let speed;try{speed=store.get('animationSpeed');}catch(_){}
         if(typeof speed==='number'&&speed>0&&Number.isFinite(speed))
@@ -1034,9 +1072,12 @@
         return /slow|turtle|lento/.test(speed)?750:/fast|goat|rápid|2x|4x/.test(speed)?150:350;
     }
     function wmStop(message){
-        wm.playing=false;if(wm.timer!==null)clearTimeout(wm.timer);wm.timer=null;
+        wm.playing=false;
+        if(wm.timer!==null)clearTimeout(wm.timer);
+        wm.timer=null;
         wm.play?.classList.remove('we-running');
         wm.activeKey=null;
+        wm.planKey=null;wm.plan=[];wm.lastTarget=null;wm.failures=0;
         if(message){wm.reason=message;setStatus(message);}
     }
     function wmStepSynthetic(){
@@ -1048,96 +1089,97 @@
         if(!wm.playing)return;
         const store=wmStore(),product=wmProduct(store);
         if(!store||!product||product!==wm.product||document.hidden||!wm.play?.isConnected){
-            wmStop('Replay pausado: camada ou controle indisponível.');
+            wmStop('Replay pausado por mudança de camada ou interface.');
             return;
         }
-        // O loop nativo e o do Enhanced jamais devem executar juntos.
-        wmStopOriginalAnimation(store);
-        wmObserve();
-        const key=wm.activeKey;
+        const key=wm.planKey;
         let now=null;
         try{now=wmTime(store.get(key));}catch(_){}
-        if(now===null){wmStop('Relógio do radar indisponível.');return;}
-        const cutoff=wm.hours>1?Date.now()-wm.hours*3600000-20*60000:-Infinity;
-        wmAddAllowedFrames(store,product,key);
-        const known=wmSequence(product,cutoff,key);
-        if(known.length<2){
-            wmStop('O Windy não forneceu horários suficientes para o replay personalizado.');
-            return;
-        }
-        // Próximo quadro estritamente crescente; volta ao início UMA vez no
-        // final. A chave de tempo nunca muda dentro de um ciclo.
-        const frame=known.find(v=>v.time>now)??known[0];
-        if(frame.time===now){
-            wmStop('Não há outro quadro disponível na timeline.');
-            return;
-        }
-        let accepted=false;
-        try{accepted=wmSetFrame(store,frame);}catch(_){}
-        if(!accepted){
-            wmStop('O Windy recusou este quadro; não foi feito avanço reverso.');
-            return;
-        }
-        // O store confirma seleção imediata, mas o raster pode não ter sido
-        // renderizado ainda. Aguardar com limite para evitar travar.
-        const deadline=Date.now()+Math.min(1300,Math.max(400,wmSpeed(store)*3));
-        const waitForRender=()=>{
-            if(!wm.playing)return;
-            if(wmStore()!==store||wmProduct(store)!==product||document.hidden){
-                wmStop('Reprodução interrompida por mudança de contexto.');
+        if(now===null){wmStop('Controlador temporal não disponível.');return;}
+        const plan=wm.plan;
+        if(plan.length<2){wmStop('Sem horários suficientes para reproduzir.');return;}
+
+        // The original Radar+ player is not allowed to reclaim the timeline.
+        // Capture-phase click interception ensures it does not start.
+        // If Windy starts it independently, stop it before selecting a frame.
+        try{if(store.get('animation')===true)wmStopOriginalAnimation(store);}catch(_){}
+
+        const frame=plan.find(v=>v.time>now+30000)??plan[0];
+        let ok=false;
+        try{ok=wmSetFrame(store,frame);}catch(_){}
+        if(!ok){
+            wm.failures++;
+            if(wm.failures>1){
+                wmStop('O Windy recusou os quadros solicitados. Intervalo inacessível nesta sessão.');
                 return;
             }
-            let actual=null,rendered=null;
+            // Skip a rejected timestamp once; do not hand control to native Play.
+            const following=plan.find(v=>v.time>frame.time);
+            if(following)try{ok=wmSetFrame(store,following);}catch(_){}
+            if(!ok){
+                wmStop('O Windy não aceitou o próximo horário da timeline.');
+                return;
+            }
+        }else wm.failures=0;
+
+        // Respect the site's frame rendering; avoid pushing through a backlog.
+        wm.lastTarget=frame.time;
+        const deadline=Date.now()+1500;
+        const render=()=>{
+            if(!wm.playing)return;
+            if(document.hidden||wmStore()!==store||wmProduct(store)!==product){
+                wmStop('Reprodução pausada por mudança de contexto.');
+                return;
+            }
+            let selected=null,rendered=null;
             try{
-                actual=wmTime(store.get(key));
+                selected=wmTime(store.get(key));
                 rendered=wmTime(store.get('lastRenderedTimestamp'));
             }catch(_){}
-            if(actual===null||Math.abs(actual-frame.time)>60000){
-                wmStop('Relógio do Windy foi alterado durante a animação.');
+            if(selected===null){
+                wmStop('O Windy perdeu o horário da reprodução.');
                 return;
             }
-            if(rendered!==null && Math.abs(rendered-frame.time)>60000 &&
-                Date.now()<deadline){
-                wm.timer=setTimeout(waitForRender,65);
+            if(Math.abs(selected-frame.time)>60000){
+                wmStop('O Windy alterou o horário externamente. Replay interrompido para evitar saltos.');
                 return;
+            }
+            if(rendered!==null&&Math.abs(rendered-selected)>60000&&Date.now()<deadline){
+                wm.timer=setTimeout(render,80);return;
             }
             wmObserve();
             wm.timer=setTimeout(wmTick,wmSpeed(store));
         };
-        wm.timer=setTimeout(waitForRender,95);
+        wm.timer=setTimeout(render,100);
     }
     function wmPlayStart(event,button){
-        if(wm.playing){
-            event.preventDefault();event.stopImmediatePropagation();
-            wmStop('Reprodução pausada.');
-            wmStopOriginalAnimation(wmStore());
-            return true;
-        }
         const store=wmStore(),product=wmProduct(store);
         if(!product)return false;
-        wmObserve();
-        const key=wmKey(store,product);
-        if(!key)return false;
-        wmAddAllowedFrames(store,product,key);
-        const observed=wmSequence(product,-Infinity,key);
-        const extended=observed.length>=2 &&
-            observed[observed.length-1].time-observed[0].time>65*60000;
-        let now=null;
-        try{now=wmTime(store.get(key));}catch(_){}
-        if(now===null)return false;
-        // Sem quadro ampliado, não substituir o Play normal por um player vazio.
-        if(wm.hours===1&&!extended)return false;
-        if(observed.length<2){
-            event.preventDefault();event.stopImmediatePropagation();
-            setStatus('Percorra os horários com as setas para registrar quadros acessíveis.');
+        // Always consume the original Play in Radar/Satellite. Previously a
+        // lack of sampled frames passed it to Windy, which snapped to last 1h.
+        event.preventDefault();event.stopImmediatePropagation();
+        if(wm.playing){
+            wmStop('Reprodução pausada.');
             return true;
         }
-        event.preventDefault();event.stopImmediatePropagation();
+        wmObserve();
+        const key=wmKey(store,product);
+        if(!key){
+            setStatus('O Windy não expôs o relógio da camada de radar.');
+            return true;
+        }
+        const plan=wmBuildPlan(store,product,key);
+        if(plan.length<2){
+            setStatus('Posicione a timeline no início e no fim usando as setas, para registrar o intervalo.');
+            return true;
+        }
         wmStopOriginalAnimation(store);
-        wm.playing=true;wm.product=product;wm.activeKey=key;wm.play=button;
+        wm.plan=plan;wm.planKey=key;wm.activeKey=key;
+        wm.playing=true;wm.product=product;wm.play=button;
+        wm.failures=0;wm.playEvents++;
         button.classList.add('we-running');
-        wm.timer=setTimeout(wmTick,30);
-        setStatus('Replay no Play original: '+observed.length+' horários da mesma camada.');
+        wm.timer=setTimeout(wmTick,70);
+        setStatus('Replay contínuo iniciado: '+plan.length+' quadros no mesmo relógio.');
         return true;
     }
     function wmHoursScan(){
@@ -1155,32 +1197,42 @@
         return wm.hourEls;
     }
     function wmFindPlay(){
-        // Uma varredura de interface não pode trocar a referência do botão
-        // durante a reprodução: isso causava pausas inesperadas.
-        if(wm.playing && wm.play?.isConnected)return;
+        if(wm.playing&&wm.play?.isConnected)return;
         const first=wm.hourEls.get(24)?.getBoundingClientRect();
         if(!first)return;
-        let best=null,dist=Infinity;
-        for(const el of document.querySelectorAll('button,[role="button"],.clickable,[data-ref],div')){
+        let best=null,score=Infinity;
+        // The circular Play is immediately to the left of 24h.
+        const nodes=document.querySelectorAll(
+            '#bottom-wrapper button,#bottom-wrapper [role="button"],#bottom-wrapper .clickable,'+
+            '#bottom-wrapper [data-ref],#bottom-wrapper div,'+
+            '[data-plugin*="bottom-controls"] button,[data-plugin*="bottom-controls"] .clickable'
+        );
+        for(const el of nodes){
             if(el.closest('#we-root'))continue;
             const r=el.getBoundingClientRect();
-            if(r.width<30||r.width>75||r.height<30||r.height>75||
-                r.right>first.left+12||r.right<first.left-130||
-                Math.abs((r.top+r.height/2)-(first.top+first.height/2))>40)continue;
+            if(r.width<28||r.width>76||r.height<28||r.height>76)continue;
+            const cx=r.left+r.width/2,cy=r.top+r.height/2;
+            const wantedX=first.left-54,wantedY=first.top+first.height/2;
+            if(cx>first.left+10||cx<first.left-155||Math.abs(cy-wantedY)>42)continue;
             const meta=[el.id,typeof el.className==='string'?el.className:'',
                 el.getAttribute('title'),el.getAttribute('data-ref'),
                 el.getAttribute('aria-label')].filter(Boolean).join(' ');
-            if(!/(play|pause|animat|click|control|button|circle)/i.test(meta)&&
-                !el.querySelector('svg,[class*="play"],button'))continue;
-            const d=Math.abs(r.right-first.left)+Math.abs(r.top-first.top);
-            if(d<dist){best=el;dist=d;}
+            const semantic=/(play|pause|animat|start|control|click|button|circle)/i.test(meta);
+            const icon=!!el.querySelector('svg,[class*="play"],[class*="pause"],button');
+            if(!semantic&&!icon)continue;
+            const rank=Math.abs(cx-wantedX)+Math.abs(cy-wantedY)+
+                (semantic?0:16)+(el.matches('button,[role="button"],.clickable')?0:12);
+            if(rank<score){best=el;score=rank;}
         }
-        if(best){
-            wm.play=best;
-            if(wm.hours>1||wm.playing){
-                best.setAttribute('data-we-native-play','1');
-                best.removeAttribute('disabled');best.setAttribute('aria-disabled','false');
-            }
+        if(!best)return;
+        wm.play=best;
+        // Reactivate the EXISTING circular Play even at the far left,
+        // without a new toolbar and without enabling any unrelated widgets.
+        for(const node of [best,best.closest('button,[role="button"]')].filter(Boolean)){
+            node.setAttribute('data-we-native-play','1');
+            node.removeAttribute('disabled');
+            node.setAttribute('aria-disabled','false');
+            node.classList.remove('disabled');
         }
     }
     function wmControls(){
@@ -1368,6 +1420,9 @@
                 version:VERSION,store:!!wmStore(),product:wmProduct(wmStore()),
                 hours:wm.hours,playing:wm.playing,activeKey:wm.activeKey,
                 effectiveTimeline:wm.hours===1?'todos os quadros observados':wm.hours+'h',
+                playbackFrames:wm.plan.length,playEvents:wm.playEvents,
+                nativeAnimation:(()=>{try{return wmStore()?.get('animation')}catch(_){return null}})(),
+                timelineNow:(()=>{try{return wmStore()?.get(wm.planKey||wmKey(wmStore(),wm.product||'radar'))}catch(_){return null}})(),
                 lastChanged:wm.lastChanged,
                 sampled:Object.fromEntries([...wm.sampled[wm.product||'radar']].map(([k,v])=>[k,v.size])),
                 reason:wm.reason
