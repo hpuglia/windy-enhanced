@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Windy Enhanced - Cores, Interface e Controles
 // @namespace    https://www.windy.com/
-// @version      6.4.2
+// @version      6.4.3
 // @description  Melhora a interface do Windy com opções visuais, visualização limpa, favoritos de visualização e controles opcionais da linha do tempo.
 // @author       Henrique / Puglia Apps
 // @match        https://www.windy.com/*
@@ -23,7 +23,7 @@
 
     // Windy Enhanced 6.4 - interface local. Nenhuma requisição externa,
     // alteração de credenciais ou simulação de assinatura.
-    const VERSION = '6.4.2';
+    const VERSION = '6.4.3';
     const STORAGE_KEY = 'windy-enhanced:v6:settings';
     const ALLOWED_VIEW_ORIGINS = new Set(['https://windy.com', 'https://www.windy.com']);
     const DEFAULTS = Object.freeze({
@@ -883,7 +883,9 @@
         key: null,
         product: null,
         store: null,
-        frameMs: 430
+        frameMs: 430,
+        selectedHours: 1,
+        suppressClickUntil: 0
     };
 
     function nativeReplayStore() {
@@ -1012,28 +1014,172 @@
         return null;
     }
 
-    function nativeReplayOnClick(event) {
-        const button = nativeReplayButtonFromClick(event);
-        if (!button) return;
+
+    // NUNCA cria outro player. Reutiliza os itens 1h/6h/24h e Play do Windy.
+    // A alteração de período usa somente o estado que o Windy expõe na página.
+    // Se o servidor não entregar quadros, a interface não consegue fabricá-los.
+    function nativeReplayRangeForHours(value, hours) {
+        const endNow = Date.now();
+        const distance = hours * 3600000;
+        if (typeof value === 'number' && Number.isFinite(value)) {
+            if (value > 1000000 && value < 100000000) return distance;
+            if (value >= 1 && value <= 48) return hours;
+        }
+        if (typeof value === 'string' && /^(1|6|24)h?$/i.test(value)) {
+            return value.endsWith('h') ? hours + 'h' : String(hours);
+        }
+        if (Array.isArray(value) && value.length === 2 &&
+            Number.isFinite(Number(value[0])) && Number.isFinite(Number(value[1]))) {
+            const last = Number(value[1]);
+            if (nativeReplayTime(last) !== null) return [last - distance, last];
+        }
+        if (value && typeof value === 'object' && !Array.isArray(value)) {
+            for (const [startKey, endKey] of [
+                ['start', 'end'], ['from', 'to'], ['min', 'max'],
+                ['startTime', 'endTime'], ['startTs', 'endTs']
+            ]) {
+                if (!Object.hasOwn(value, startKey) || !Object.hasOwn(value, endKey)) continue;
+                const last = Number(value[endKey]);
+                if (nativeReplayTime(last) !== null) {
+                    return { ...value, [startKey]: last - distance };
+                }
+            }
+        }
+        return null;
+    }
+
+    function nativeReplayUpdateRange(hours) {
+        const store = nativeReplayStore();
+        if (!store || !nativeReplayProduct(store)) return false;
+        try {
+            const current = store.get('radarPlusAnimationRange');
+            const target = nativeReplayRangeForHours(current, hours);
+            if (target === null) return false;
+            store.set('radarPlusAnimationRange', target);
+            return true;
+        } catch (_) { return false; }
+    }
+
+    function nativeReplayDurationCandidates() {
+        const matches = new Map();
+        // Limita-se aos controles situados junto à barra de Radar/Satélite.
+        const selectors = [
+            '#bottom-wrapper',
+            '[data-plugin="bottom-controls-desktop"]',
+            '[data-plugin="bottom-controls-mobile"]',
+            '[data-plugin*="radar-plus"]',
+            '[data-plugin*="radarPlus"]'
+        ];
+        const panels = [...new Set(selectors.flatMap(q => [...document.querySelectorAll(q)]))];
+        for (const panel of panels) {
+            const nodes = panel.querySelectorAll('button, [role="button"], label, a, span, div');
+            for (const node of nodes) {
+                if (node.closest('#we-root')) continue;
+                const text = (node.textContent || '').replace(/\s+/g, ' ').trim();
+                const found = /^(?:(?:há|ago)\s*)?(1|6|24)\s*h$/i.exec(text);
+                if (!found) continue;
+                if ([...node.children].some(child =>
+                    /^(?:(?:há|ago)\s*)?(1|6|24)\s*h$/i.test((child.textContent || '').trim()))) continue;
+                const rect = node.getBoundingClientRect();
+                if (rect.width < 14 || rect.width > 120 || rect.height < 10 ||
+                    rect.height > 85 || rect.bottom < innerHeight - 265) continue;
+                const hours = Number(found[1]);
+                if (!matches.has(hours)) matches.set(hours, node);
+            }
+        }
+        return matches.has(1) && matches.has(6) && matches.has(24) ? matches : new Map();
+    }
+
+    let nativeReplayDurationElements = new Map();
+    function nativeReplayRefreshOriginalControls() {
+        const store = nativeReplayStore();
+        if (!store || !nativeReplayProduct(store)) return;
+        const found = nativeReplayDurationCandidates();
+        if (found.size !== 3) return;
+        nativeReplayDurationElements = found;
+        for (const [hours, element] of found) {
+            element.setAttribute('data-we-radsat-hours', String(hours));
+            if (hours !== 1) {
+                element.removeAttribute('disabled');
+                element.setAttribute('aria-disabled', 'false');
+            }
+            element.toggleAttribute('data-we-radsat-selected', nativeReplay.selectedHours === hours);
+            element.toggleAttribute('data-we-radsat-deselected', hours === 1 && nativeReplay.selectedHours !== 1);
+        }
+    }
+
+    function nativeReplayDurationAt(event) {
+        if (!event.isTrusted || event.button !== 0) return null;
+        for (const [hours, element] of nativeReplayDurationElements) {
+            if (!element.isConnected) continue;
+            const r = element.getBoundingClientRect();
+            if (event.clientX >= r.left && event.clientX <= r.right &&
+                event.clientY >= r.top && event.clientY <= r.bottom) {
+                return hours;
+            }
+        }
+        return null;
+    }
+
+    function nativeReplaySelectHours(event, hours) {
+        if (hours === 1) {
+            nativeReplay.selectedHours = 1;
+            nativeReplayStop();
+            nativeReplayRefreshOriginalControls();
+            return;
+        }
+        // Intercepta a seleção Premium desativada, sem criar nenhuma UI.
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        nativeReplay.suppressClickUntil = Date.now() + 650;
+        nativeReplay.selectedHours = hours;
+        nativeReplayStop();
+        nativeReplayUpdateRange(hours);
+        nativeReplayRefreshOriginalControls();
+    }
+
+    function nativeReplayFindPlayAt(event) {
+        if (!event.isTrusted || event.button !== 0) return null;
+        const nodes = document.querySelectorAll(
+            '#bottom-wrapper button, #bottom-wrapper [role="button"], ' +
+            '#bottom-wrapper .clickable, [data-plugin*="radar"] button, ' +
+            '[data-plugin*="radar"] [role="button"], [class*="play-button"], ' +
+            '[data-ref*="play"], [aria-label*="Play"], [aria-label*="Paus"]'
+        );
+        for (const node of nodes) {
+            if (node.closest('#we-root')) continue;
+            const rect = node.getBoundingClientRect();
+            if (!rect.width || !rect.height || rect.bottom < innerHeight - 280) continue;
+            if (event.clientX < rect.left || event.clientX > rect.right ||
+                event.clientY < rect.top || event.clientY > rect.bottom) continue;
+            const attrs = [
+                node.id, typeof node.className === 'string' ? node.className : '',
+                node.getAttribute('aria-label'), node.getAttribute('title'),
+                node.getAttribute('data-ref')
+            ].filter(Boolean).join(' ');
+            if (/(play|pause|reproduzir|pausar|animat)/i.test(attrs) &&
+                !/(display|previsão|forecast|replay-speed)/i.test(attrs)) return node;
+        }
+        return null;
+    }
+
+    function nativeReplayStartOnOriginalPlay(event, button) {
+        const store = nativeReplayStore();
+        const product = store && nativeReplayProduct(store);
+        if (!product) return false;
         if (nativeReplay.timer !== null) {
             event.preventDefault();
             event.stopImmediatePropagation();
             nativeReplayStop();
-            return;
+            return true;
         }
-        const store = nativeReplayStore();
-        const product = store && nativeReplayProduct(store);
-        if (!product) return;
-        try {
-            // Se o player nativo já estiver rodando, o clique deve pausá-lo.
-            if (store.get('animation') === true) return;
-        } catch (_) { /* Pode não estar publicado. */ }
-
         nativeReplayObserve();
+        const current = nativeReplayTime(store.get('radsatTimestamp'))
+            ?? nativeReplayTime(store.get(product === 'radar' ? 'radarTimestamp' : 'satelliteTimestamp'));
+        const older = current !== null && Date.now() - current > 65 * 60000;
+        if (!older && nativeReplay.selectedHours === 1) return false;
         const choice = nativeReplayChoice(product);
-        if (!choice) return;
-
-        // Intercepta SOMENTE o Play existente, sem adicionar outro botão.
+        if (!choice) return false; // Play original conserva seu comportamento.
         event.preventDefault();
         event.stopImmediatePropagation();
         nativeReplay.store = store;
@@ -1041,7 +1187,42 @@
         nativeReplay.key = choice.key;
         nativeReplay.product = product;
         button.setAttribute('data-we-replaying', '1');
-        nativeReplay.timer = setTimeout(nativeReplayTick, 10);
+        nativeReplay.timer = setTimeout(nativeReplayTick, 15);
+        return true;
+    }
+
+    function nativeReplayOnPointerDown(event) {
+        if (!event.isTrusted || event.button !== 0) return;
+        if (event.target.closest?.('#we-root')) return;
+        // Coordenadas cobrem inclusive um botão nativo marcado como disabled.
+        const hours = nativeReplayDurationAt(event);
+        if (hours !== null) {
+            nativeReplaySelectHours(event, hours);
+            return;
+        }
+        const original = nativeReplayFindPlayAt(event);
+        if (!original) {
+            if (nativeReplay.timer !== null &&
+                event.target.closest?.('#bottom-wrapper, .timeline, [data-plugin*="radar"]')) {
+                nativeReplayStop();
+            }
+            return;
+        }
+        if (nativeReplayStartOnOriginalPlay(event, original)) {
+            nativeReplay.suppressClickUntil = Date.now() + 650;
+        }
+    }
+
+    function nativeReplayOnClick(event) {
+        // Suprime o click disparado após um pointerdown já tratado.
+        if (event.isTrusted && Date.now() < nativeReplay.suppressClickUntil &&
+            (nativeReplayDurationAt(event) !== null || nativeReplayFindPlayAt(event))) {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            return;
+        }
+        const original = nativeReplayButtonFromClick(event);
+        if (original) nativeReplayStartOnOriginalPlay(event, original);
     }
 
     function initNativeReplay() {
@@ -1052,6 +1233,15 @@
             'align-items: center; justify-content: center; border-radius: inherit; ' +
             'background: #f7f7f7; color: #d00; pointer-events: none; font: bold 18px system-ui; }'
         );
+        addCSS(
+            '[data-we-radsat-hours="6"], [data-we-radsat-hours="24"] {' +
+            'opacity:1 !important; filter:none !important; pointer-events:auto !important; cursor:pointer !important; }' +
+            '[data-we-radsat-selected] { background:#ad6954 !important; color:#fff !important; ' +
+            'border-radius:16px !important; }' +
+            '[data-we-radsat-deselected] { background:transparent !important; ' +
+            'box-shadow:none !important; }'
+        );
+        document.addEventListener('pointerdown', nativeReplayOnPointerDown, true);
         document.addEventListener('click', nativeReplayOnClick, true);
         document.addEventListener('keydown', event => {
             if (event.isTrusted && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
@@ -1059,18 +1249,15 @@
                 setTimeout(nativeReplayObserve, 120);
             }
         }, true);
-        document.addEventListener('pointerdown', event => {
-            if (nativeReplay.timer === null) return;
-            if (nativeReplay.button?.contains(event.target)) return;
-            if (event.target.closest?.('#bottom-wrapper, .timeline, [data-plugin*="radar"]')) {
-                nativeReplayStop();
-            }
-        }, true);
         window.addEventListener('pagehide', nativeReplayStop);
         window.setInterval(() => {
-            if (!document.hidden) nativeReplayObserve();
+            if (!document.hidden) {
+                nativeReplayObserve();
+                nativeReplayRefreshOriginalControls();
+            }
         }, 135);
         nativeReplayObserve();
+        nativeReplayRefreshOriginalControls();
     }
 
     function start() {
